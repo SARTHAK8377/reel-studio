@@ -1,0 +1,80 @@
+[
+  {
+    "style": "Surprising claim, then explain it step by step",
+    "hook": "YOUR BANANA IS\nRADIOACTIVE",
+    "lines": [
+      "Your banana is slightly radioactive. Really.",
+      "Bananas contain a lot of potassium, a mineral your body needs.",
+      "A tiny part of that potassium is naturally radioactive.",
+      "So every banana gives off a very small amount of radiation.",
+      "How small? You would need to eat millions at once for it to harm you.",
+      "Your stomach would give up long before the radiation did.",
+      "So enjoy your banana. It is completely safe.",
+      "Send this to the friend who eats three a day."
+    ]
+  },
+  {
+    "style": "Fact that sounds impossible, then the simple reason",
+    "hook": "A DAY LONGER\nTHAN A YEAR",
+    "lines": [
+      "On Venus, a single day lasts longer than a whole year.",
+      "Venus spins very slowly. One full spin takes 243 Earth days.",
+      "But it only takes 225 Earth days to travel once around the Sun.",
+      "So Venus finishes a whole year before it finishes one spin.",
+      "It also spins the opposite way to Earth.",
+      "That means on Venus, the Sun rises in the west.",
+      "Follow for more planets that break the rules."
+    ]
+  },
+  {
+    "style": "Comparison of two dates that nobody expects",
+    "hook": "SHARKS ARE OLDER\nTHAN TREES",
+    "lines": [
+      "Sharks are older than trees.",
+      "The first sharks appeared about 450 million years ago.",
+      "The first trees appeared about 385 million years ago.",
+      "So sharks were swimming in the oceans long before any forest existed.",
+      "Since then, they have survived five mass extinctions.",
+      "That includes the one that wiped out the dinosaurs.",
+      "Follow for more facts about Earth's oldest survivors."
+    ]
+  },
+  {
+    "style": "Weird animal fact, then why it is useful",
+    "hook": "THIS ANIMAL POOPS\nCUBES",
+    "lines": [
+      "This animal makes poop shaped like little cubes.",
+      "It is the wombat, a small furry animal from Australia.",
+      "Its gut squeezes the poop into blocks as it moves through.",
+      "Wombats leave their poop on rocks and logs to mark their territory.",
+      "Round poop would roll away, but cubes stay where they are put.",
+      "So the strange shape actually helps them.",
+      "Comment if you knew this before today."
+    ]
+  },
+  {
+    "style": "History fact that sounds wrong but is true",
+    "hook": "CLEOPATRA vs\nTHE MOON LANDING",
+    "lines": [
+      "Cleopatra lived closer in time to the Moon landing than to the building of the Great Pyramid.",
+      "The Great Pyramid was built around 2560 BC.",
+      "Cleopatra was born around 69 BC, about 2,500 years later.",
+      "The Moon landing happened in 1969, about 2,000 years after her.",
+      "So to Cleopatra, the pyramids were already ancient history.",
+      "Follow for more history that sounds wrong but is true."
+    ]
+  },
+  {
+    "style": "Animal beats you at something, then how",
+    "hook": "IT HOLDS ITS BREATH\nFOR 40 MINUTES",
+    "lines": [
+      "A sloth can hold its breath much longer than you can.",
+      "By slowing down its heart, a sloth can hold its breath for up to 40 minutes.",
+      "Most people can only manage about one minute.",
+      "Sloths are also surprisingly good swimmers.",
+      "They move faster in water than they do in trees.",
+      "So the slowest animal on land is secretly great in water.",
+      "Save this for your next quiz night."
+    ]
+  }
+]
