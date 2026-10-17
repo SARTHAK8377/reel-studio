@@ -1,0 +1,944 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reel Studio</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap">
+<script src="https://unpkg.com/@phosphor-icons/web@2.1.1"></script>
+<style>
+  /* Design: dark studio tool. One accent (coral), radius system: shells 20px, panels 14px, inputs 10px, buttons pill. */
+  :root {
+    --bg: #0b0b0d; --rail: #0f0f12; --panel: #141418; --panel-2: #1a1a1f; --sunk: #0e0e11;
+    --ink: #f3f3f5; --muted: #9a9aa4; --faint: #6c6c76; --line: rgba(255,255,255,.07); --line-2: rgba(255,255,255,.12);
+    --accent: #ff6a4d; --accent-ink: #1a0b07; --accent-soft: rgba(255,106,77,.12);
+    --ok: #4ccf8a; --warn: #f0b44c; --bad: #ff5d5d;
+    --shadow: 0 24px 60px -24px rgba(0,0,0,.6);
+    --ease: cubic-bezier(.22,1,.36,1);
+    color-scheme: dark;
+  }
+  :root[data-theme="light"] {
+    --bg: #f4f4f6; --rail: #ececf0; --panel: #ffffff; --panel-2: #f7f7f9; --sunk: #efeff3;
+    --ink: #17171b; --muted: #5d5d68; --faint: #8a8a95; --line: rgba(20,20,30,.08); --line-2: rgba(20,20,30,.14);
+    --accent: #e8492b; --accent-ink: #ffffff; --accent-soft: rgba(232,73,43,.10);
+    --ok: #17924f; --warn: #a86a00; --bad: #d32f2f;
+    --shadow: 0 24px 60px -28px rgba(40,40,60,.25);
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]):not([data-theme="light"]) {
+      --bg: #f4f4f6; --rail: #ececf0; --panel: #ffffff; --panel-2: #f7f7f9; --sunk: #efeff3;
+      --ink: #17171b; --muted: #5d5d68; --faint: #8a8a95; --line: rgba(20,20,30,.08); --line-2: rgba(20,20,30,.14);
+      --accent: #e8492b; --accent-ink: #ffffff; --accent-soft: rgba(232,73,43,.10);
+      --ok: #17924f; --warn: #a86a00; --bad: #d32f2f;
+      --shadow: 0 24px 60px -28px rgba(40,40,60,.25);
+      color-scheme: light;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 15px/1.5 "Geist", system-ui, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased; }
+  button, input, select, textarea { font: inherit; color: inherit; }
+  a { color: inherit; }
+  .mono { font-family: "Geist Mono", ui-monospace, Consolas, monospace; }
+  [hidden] { display: none !important; }
+
+  /* ---------- shell ---------- */
+  .app { display: grid; grid-template-columns: 232px 1fr; min-height: 100dvh; }
+  .rail { background: var(--rail); border-right: 1px solid var(--line); padding: 20px 14px; display: flex;
+          flex-direction: column; gap: 6px; position: sticky; top: 0; height: 100dvh; }
+  .brand { display: flex; align-items: center; gap: 10px; padding: 4px 8px 18px; font-weight: 600; letter-spacing: -.01em; }
+  .brand .mark { width: 28px; height: 28px; border-radius: 8px; background: var(--accent); color: var(--accent-ink);
+                 display: grid; place-items: center; font-size: 16px; }
+  .nav { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 10px; color: var(--muted);
+         text-decoration: none; font-weight: 500; transition: background .25s var(--ease), color .25s var(--ease); }
+  .nav i { font-size: 18px; }
+  .nav:hover { background: var(--line); color: var(--ink); }
+  .nav.on { background: var(--panel); color: var(--ink); box-shadow: inset 0 0 0 1px var(--line); }
+  .nav .count { margin-left: auto; font-size: 12px; min-width: 20px; text-align: center; padding: 1px 6px;
+                border-radius: 99px; background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .rail-foot { margin-top: auto; display: grid; gap: 10px; }
+  .status { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); padding: 10px;
+            border-radius: 10px; background: var(--panel); box-shadow: inset 0 0 0 1px var(--line); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex: none; }
+  .dot.ok { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 20%, transparent); }
+  .dot.bad { background: var(--bad); }
+  .dot.busy { background: var(--warn); animation: pulse 1.6s var(--ease) infinite; }
+  @keyframes pulse { 50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--warn) 0%, transparent); opacity: .55; } }
+  .theme { display: flex; gap: 2px; padding: 3px; border-radius: 99px; background: var(--panel); box-shadow: inset 0 0 0 1px var(--line); }
+  .theme button { flex: 1; border: 0; background: none; padding: 5px; border-radius: 99px; cursor: pointer; color: var(--muted); }
+  .theme button.on { background: var(--panel-2); color: var(--ink); box-shadow: inset 0 0 0 1px var(--line-2); }
+
+  main { min-width: 0; padding: 28px clamp(16px, 3vw, 40px) 60px; }
+  .view { animation: rise .45s var(--ease); }
+  @keyframes rise { from { opacity: 0; transform: translateY(8px); } }
+  .head { display: flex; align-items: end; justify-content: space-between; gap: 16px; margin-bottom: 22px; flex-wrap: wrap; }
+  .eyebrow { display: inline-block; font-size: 11px; letter-spacing: .16em; text-transform: uppercase; color: var(--muted);
+             padding: 3px 10px; border-radius: 99px; box-shadow: inset 0 0 0 1px var(--line-2); margin-bottom: 10px; }
+  h1 { font-size: clamp(26px, 3vw, 34px); line-height: 1.1; letter-spacing: -.03em; margin: 0; font-weight: 600; }
+  .lede { color: var(--muted); margin: 6px 0 0; max-width: 60ch; }
+
+  /* shells: outer tray + inner panel */
+  .shell { padding: 6px; border-radius: 20px; background: var(--line); box-shadow: inset 0 0 0 1px var(--line); }
+  .panel { background: var(--panel); border-radius: 14px; box-shadow: inset 0 1px 0 rgba(255,255,255,.04); }
+
+  /* ---------- create ---------- */
+  .create { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(280px, 1fr); gap: 20px; align-items: start; }
+  .composer { padding: 22px; display: grid; gap: 18px; }
+  .field > label, .label { display: flex; align-items: baseline; gap: 8px; font-weight: 500; font-size: 13px;
+                           color: var(--muted); margin-bottom: 7px; }
+  .field > label .opt, .label .opt { color: var(--faint); font-weight: 400; }
+  .input { width: 100%; padding: 11px 13px; border-radius: 10px; border: 0; background: var(--sunk);
+           box-shadow: inset 0 0 0 1px var(--line); outline: none; transition: box-shadow .2s var(--ease); }
+  .input:focus { box-shadow: inset 0 0 0 1px var(--accent), 0 0 0 4px var(--accent-soft); }
+  textarea.input { resize: vertical; min-height: 76px; }
+  .topic-box { position: relative; }
+  .topic-box textarea { font-size: 20px; letter-spacing: -.01em; min-height: 92px; padding: 16px; }
+  .topic-box .tip { position: absolute; right: 12px; bottom: 10px; font-size: 12px; color: var(--faint); pointer-events: none; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .seg { display: inline-flex; padding: 3px; border-radius: 99px; background: var(--sunk); box-shadow: inset 0 0 0 1px var(--line); }
+  .seg input { position: absolute; opacity: 0; pointer-events: none; }
+  .seg label { display: inline-flex; align-items: center; gap: 6px; padding: 7px 14px; border-radius: 99px; cursor: pointer;
+               color: var(--muted); font-weight: 500; font-size: 14px; transition: all .25s var(--ease); }
+  .seg input:checked + label { background: var(--panel-2); color: var(--ink); box-shadow: inset 0 0 0 1px var(--line-2), 0 2px 8px -2px rgba(0,0,0,.3); }
+  .seg input:focus-visible + label { outline: 2px solid var(--accent); }
+  .fmt { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .fmt input { position: absolute; opacity: 0; pointer-events: none; }
+  .fmt label { display: grid; justify-items: center; gap: 6px; padding: 10px 6px; border-radius: 10px; cursor: pointer;
+               background: var(--sunk); box-shadow: inset 0 0 0 1px var(--line); font-size: 12px; color: var(--muted);
+               transition: all .25s var(--ease); }
+  .fmt .shape { border: 1.5px solid currentColor; border-radius: 3px; }
+  .fmt input:checked + label { color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
+  .fmt input:focus-visible + label { outline: 2px solid var(--accent); }
+  .more { border-radius: 12px; background: var(--sunk); box-shadow: inset 0 0 0 1px var(--line); }
+  .more summary { list-style: none; cursor: pointer; padding: 12px 14px; display: flex; align-items: center; gap: 10px;
+                  font-weight: 500; color: var(--muted); }
+  .more summary::-webkit-details-marker { display: none; }
+  .more summary .chev { margin-left: auto; transition: transform .3s var(--ease); }
+  .more[open] summary .chev { transform: rotate(180deg); }
+  .more .inner { padding: 0 14px 14px; display: grid; gap: 14px; }
+  .drop { display: grid; place-items: center; gap: 4px; padding: 18px; border-radius: 10px; text-align: center; cursor: pointer;
+          border: 1.5px dashed var(--line-2); color: var(--muted); font-size: 13px; transition: all .2s var(--ease); }
+  .drop:hover, .drop.over { border-color: var(--accent); color: var(--ink); background: var(--accent-soft); }
+  .drop i { font-size: 22px; }
+  .check { display: flex; gap: 10px; align-items: flex-start; font-size: 14px; cursor: pointer; }
+  .check input { accent-color: var(--accent); margin-top: 3px; }
+  .check small { display: block; color: var(--faint); }
+  .submit-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .hint { color: var(--faint); font-size: 13px; }
+
+  .btn { display: inline-flex; align-items: center; gap: 10px; border: 0; cursor: pointer; border-radius: 99px;
+         padding: 7px 7px 7px 20px; font-weight: 600; white-space: nowrap; background: var(--accent); color: var(--accent-ink);
+         transition: transform .2s var(--ease), filter .2s var(--ease); }
+  .btn .nub { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; background: rgba(0,0,0,.14);
+              transition: transform .3s var(--ease); }
+  .btn:hover { filter: brightness(1.06); }
+  .btn:hover .nub { transform: translateX(2px); }
+  .btn:active { transform: scale(.98); }
+  .btn:disabled { opacity: .55; cursor: default; }
+  .ghost { display: inline-flex; align-items: center; gap: 7px; border: 0; cursor: pointer; border-radius: 99px;
+           padding: 8px 14px; font-weight: 500; font-size: 14px; background: var(--panel-2); color: var(--ink);
+           box-shadow: inset 0 0 0 1px var(--line-2); text-decoration: none; white-space: nowrap; transition: all .2s var(--ease); }
+  .ghost:hover { box-shadow: inset 0 0 0 1px var(--accent); color: var(--accent); }
+  .ghost:active { transform: scale(.98); }
+  .ghost.danger:hover { box-shadow: inset 0 0 0 1px var(--bad); color: var(--bad); }
+  .ghost:disabled { opacity: .5; cursor: default; }
+
+  .side { display: grid; gap: 14px; position: sticky; top: 28px; }
+  .side-card { padding: 18px; }
+  .side-card h3 { margin: 0 0 12px; font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  .side-card h3 .n { color: var(--faint); font-weight: 400; }
+  .steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+  .steps li { display: grid; grid-template-columns: 26px 1fr; gap: 10px; font-size: 14px; color: var(--muted); }
+  .steps li i { width: 26px; height: 26px; display: grid; place-items: center; border-radius: 8px; background: var(--sunk);
+                box-shadow: inset 0 0 0 1px var(--line); color: var(--ink); font-size: 14px; }
+  .steps b { color: var(--ink); font-weight: 500; display: block; }
+
+  /* ---------- progress items ---------- */
+  .queue { display: grid; gap: 10px; }
+  .qitem { padding: 12px; border-radius: 12px; background: var(--sunk); box-shadow: inset 0 0 0 1px var(--line); cursor: pointer;
+           transition: box-shadow .2s var(--ease); }
+  .qitem:hover { box-shadow: inset 0 0 0 1px var(--line-2); }
+  .qitem .t { font-weight: 500; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .qitem .s { font-size: 12px; color: var(--muted); margin-top: 2px; display: flex; gap: 6px; align-items: center; }
+  .bar { height: 4px; border-radius: 99px; background: var(--line); overflow: hidden; margin-top: 10px; }
+  .bar > i { display: block; height: 100%; background: var(--accent); border-radius: 99px; transition: width 1.2s var(--ease); }
+  .empty-mini { color: var(--faint); font-size: 14px; padding: 6px 0; }
+
+  /* ---------- library ---------- */
+  .toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .search { position: relative; }
+  .search i { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--faint); }
+  .search input { padding-left: 34px; width: 240px; border-radius: 99px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 18px; }
+  .tile { all: unset; cursor: pointer; display: grid; gap: 10px; min-width: 0; }
+  .tile:focus-visible .thumb { outline: 2px solid var(--accent); outline-offset: 3px; }
+  .thumb { position: relative; aspect-ratio: 9/12; border-radius: 14px; overflow: hidden; background: var(--panel);
+           box-shadow: inset 0 0 0 1px var(--line); transition: transform .4s var(--ease), box-shadow .4s var(--ease); }
+  .tile:hover .thumb { transform: translateY(-3px); box-shadow: inset 0 0 0 1px var(--line-2), var(--shadow); }
+  .thumb video { width: 100%; height: 100%; object-fit: cover; display: block; background: #000; }
+  .thumb .badge { position: absolute; left: 10px; bottom: 10px; font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 99px;
+                  background: rgba(10,10,12,.72); color: #fff; backdrop-filter: blur(8px); display: inline-flex; gap: 5px; align-items: center; }
+  .thumb .play { position: absolute; inset: auto 10px 10px auto; width: 34px; height: 34px; border-radius: 50%; display: grid;
+                 place-items: center; background: rgba(10,10,12,.72); color: #fff; backdrop-filter: blur(8px); opacity: 0;
+                 transform: scale(.9); transition: all .3s var(--ease); }
+  .tile:hover .play { opacity: 1; transform: none; }
+  .thumb.pending { display: grid; place-items: center; padding: 18px; text-align: center; }
+  .thumb.pending::before { content: ""; position: absolute; inset: 0;
+    background: linear-gradient(110deg, transparent 30%, var(--line) 50%, transparent 70%); background-size: 220% 100%;
+    animation: shimmer 2.2s linear infinite; }
+  @keyframes shimmer { from { background-position: 120% 0; } to { background-position: -120% 0; } }
+  .thumb.pending .stage { position: relative; font-size: 13px; color: var(--muted); display: grid; gap: 8px; justify-items: center; }
+  .thumb.pending .stage i { font-size: 26px; color: var(--accent); }
+  .thumb.pending .bar { width: 120px; }
+  .thumb.failed { display: grid; place-items: center; text-align: center; padding: 18px; color: var(--bad); font-size: 13px; }
+  .thumb.failed i { font-size: 26px; }
+  .tile .cap { display: grid; gap: 2px; padding: 0 2px; }
+  .tile .cap b { font-weight: 500; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tile .cap span { font-size: 12px; color: var(--faint); }
+  .tile { position: relative; }
+  .tile-del { position: absolute; top: 10px; right: 10px; z-index: 2; width: 32px; height: 32px; border-radius: 50%; border: 0;
+              display: grid; place-items: center; cursor: pointer; background: rgba(10,10,12,.72); color: #fff;
+              backdrop-filter: blur(8px); opacity: 0; transform: scale(.9); transition: all .25s var(--ease); }
+  .tile:hover .tile-del, .tile:focus-within .tile-del { opacity: 1; transform: none; }
+  .tile-del:hover { background: var(--bad); }
+  .tick { position: absolute; top: 10px; left: 10px; z-index: 2; width: 24px; height: 24px; border-radius: 7px; display: grid;
+          place-items: center; background: rgba(10,10,12,.6); box-shadow: inset 0 0 0 1.5px rgba(255,255,255,.7); color: transparent;
+          backdrop-filter: blur(8px); transition: all .2s var(--ease); }
+  .selecting .tile-del { display: none; }
+  .tile.sel .tick { background: var(--accent); box-shadow: none; color: var(--accent-ink); }
+  .tile.sel .thumb { box-shadow: inset 0 0 0 2px var(--accent); transform: scale(.97); }
+  .selbar { position: fixed; left: 50%; bottom: 22px; transform: translate(-50%, 140%); z-index: 30; display: flex; gap: 8px;
+            align-items: center; padding: 8px 8px 8px 18px; border-radius: 99px; background: var(--panel); flex-wrap: wrap;
+            box-shadow: var(--shadow), inset 0 0 0 1px var(--line-2); transition: transform .45s var(--ease); max-width: calc(100vw - 24px); }
+  .selbar.on { transform: translate(-50%, 0); }
+  .selbar:not(.on) { visibility: hidden; transition: transform .45s var(--ease), visibility 0s .45s; }
+  .selbar b { font-weight: 600; margin-right: 6px; white-space: nowrap; }
+  @media (max-width: 760px) { .selbar { bottom: 84px; } .tile-del { opacity: 1; transform: none; } }
+  .empty { display: grid; justify-items: center; text-align: center; gap: 10px; padding: 70px 20px; color: var(--muted); }
+  .empty i { font-size: 34px; color: var(--accent); }
+  .empty b { color: var(--ink); font-size: 17px; font-weight: 600; }
+
+  /* ---------- drawer ---------- */
+  .scrim { position: fixed; inset: 0; background: rgba(5,5,7,.55); backdrop-filter: blur(3px); opacity: 0; pointer-events: none;
+           transition: opacity .35s var(--ease); z-index: 20; }
+  .scrim.on { opacity: 1; pointer-events: auto; }
+  .drawer { position: fixed; top: 10px; right: 10px; bottom: 10px; width: min(980px, calc(100vw - 20px)); z-index: 21;
+            transform: translateX(calc(100% + 20px)); transition: transform .5s var(--ease); display: flex; }
+  .drawer.on { transform: none; }
+  .drawer > .panel { flex: 1; display: grid; grid-template-rows: auto 1fr; overflow: hidden; box-shadow: var(--shadow), inset 0 0 0 1px var(--line); }
+  .dhead { display: flex; align-items: center; gap: 12px; padding: 16px 18px; border-bottom: 1px solid var(--line); }
+  .dhead h2 { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -.01em; flex: 1; min-width: 0;
+              white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .icon-btn { width: 36px; height: 36px; border-radius: 50%; border: 0; display: grid; place-items: center; cursor: pointer;
+              background: var(--panel-2); box-shadow: inset 0 0 0 1px var(--line); color: var(--muted); flex: none; }
+  .icon-btn:hover { color: var(--ink); }
+  .dbody { display: grid; grid-template-columns: auto 1fr; min-height: 0; }
+  .stage-col { padding: 18px; border-right: 1px solid var(--line); display: grid; align-content: start; gap: 14px;
+               background: var(--panel-2); overflow: auto; }
+  .player { border-radius: 14px; overflow: hidden; background: #000; box-shadow: inset 0 0 0 1px var(--line); }
+  .player video { display: block; width: 280px; aspect-ratio: 9/16; max-height: calc(100dvh - 230px); object-fit: contain; background: #000; }
+  .player.f-1-1 video { width: 340px; aspect-ratio: 1/1; }
+  .player.f-16-9 video { width: 420px; aspect-ratio: 16/9; }
+  .player.wait { width: 280px; aspect-ratio: 9/16; display: grid; place-items: center; color: var(--muted); text-align: center; padding: 20px; background: var(--sunk); }
+  .row-btns { display: flex; gap: 8px; flex-wrap: wrap; }
+  .facts { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; font-size: 13px; }
+  .facts dt { color: var(--faint); }
+  .facts dd { margin: 0; }
+  .info-col { display: grid; grid-template-rows: auto 1fr; min-height: 0; min-width: 0; }
+  .tabs { display: flex; gap: 4px; padding: 12px 18px 0; border-bottom: 1px solid var(--line); overflow-x: auto; }
+  .tab { border: 0; background: none; cursor: pointer; padding: 9px 12px; color: var(--muted); font-weight: 500; position: relative;
+         display: inline-flex; gap: 7px; align-items: center; white-space: nowrap; }
+  .tab::after { content: ""; position: absolute; left: 10px; right: 10px; bottom: -1px; height: 2px; border-radius: 2px;
+                background: var(--accent); transform: scaleX(0); transition: transform .3s var(--ease); }
+  .tab.on { color: var(--ink); }
+  .tab.on::after { transform: none; }
+  .tab .pip { font-size: 11px; padding: 0 6px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); }
+  .pane { padding: 20px 22px 28px; overflow: auto; }
+  .screen-hook { display: inline-block; font-weight: 700; letter-spacing: .01em; line-height: 1.2; padding: 10px 14px;
+                 border-radius: 10px; background: var(--ink); color: var(--bg); white-space: pre-line; margin-bottom: 16px; }
+  .lines { list-style: none; margin: 0; padding: 0; counter-reset: l; display: grid; gap: 2px; }
+  .lines li { counter-increment: l; display: grid; grid-template-columns: 28px 1fr auto; gap: 10px; padding: 10px 8px;
+              border-radius: 10px; align-items: baseline; }
+  .lines li:hover { background: var(--panel-2); }
+  .lines li::before { content: counter(l, decimal-leading-zero); font: 12px "Geist Mono", monospace; color: var(--faint); }
+  .lines li.hook { background: var(--accent-soft); }
+  .lines .photo { grid-column: 2; font-size: 12px; color: var(--faint); display: flex; gap: 5px; align-items: center; }
+  .tag { font: 11px "Geist Mono", monospace; padding: 1px 6px; border-radius: 6px; background: var(--sunk);
+         box-shadow: inset 0 0 0 1px var(--line); color: var(--muted); }
+  .hooks { display: grid; gap: 12px; }
+  .hook-card { display: grid; grid-template-columns: 36px 1fr; gap: 14px; padding: 16px; border-radius: 14px; background: var(--panel-2);
+               box-shadow: inset 0 0 0 1px var(--line); }
+  .hook-card.used { box-shadow: inset 0 0 0 1px var(--accent); background: var(--accent-soft); }
+  .hook-card .rank { width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center; font-weight: 600;
+                     background: var(--sunk); box-shadow: inset 0 0 0 1px var(--line); font-family: "Geist Mono", monospace; }
+  .hook-card.used .rank { background: var(--accent); color: var(--accent-ink); box-shadow: none; }
+  .hook-card .spoken { font-size: 16px; font-weight: 500; letter-spacing: -.01em; }
+  .hook-card .scr { margin-top: 6px; font-size: 12px; font-weight: 700; letter-spacing: .02em; color: var(--muted); white-space: pre-line; }
+  .hook-card .why { margin-top: 6px; font-size: 13px; color: var(--faint); }
+  .hook-card .foot { margin-top: 12px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .used-label { font-size: 12px; font-weight: 600; color: var(--accent); display: inline-flex; gap: 5px; align-items: center; }
+  .note { font-size: 13px; color: var(--muted); padding: 12px 14px; border-radius: 10px; background: var(--sunk);
+          box-shadow: inset 0 0 0 1px var(--line); display: flex; gap: 10px; align-items: flex-start; margin-bottom: 14px; }
+  .note i { color: var(--accent); font-size: 16px; margin-top: 1px; }
+  .srcs { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
+  .srcs li { display: flex; gap: 10px; align-items: baseline; padding: 10px 12px; border-radius: 10px; background: var(--panel-2);
+             box-shadow: inset 0 0 0 1px var(--line); }
+  .srcs a { text-decoration: none; } .srcs a:hover { color: var(--accent); }
+  .log { white-space: pre-wrap; font: 12px/1.6 "Geist Mono", ui-monospace, monospace; color: var(--muted); background: var(--sunk);
+         border-radius: 10px; padding: 14px; box-shadow: inset 0 0 0 1px var(--line); max-height: 50vh; overflow: auto; margin: 0; }
+  .kv { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; margin-bottom: 16px; }
+  .kv div { padding: 12px; border-radius: 10px; background: var(--panel-2); box-shadow: inset 0 0 0 1px var(--line); }
+  .kv span { display: block; font-size: 12px; color: var(--faint); }
+  .kv b { font-weight: 600; font-family: "Geist Mono", monospace; font-size: 15px; }
+  .err-box { color: var(--bad); padding: 12px 14px; border-radius: 10px; background: color-mix(in srgb, var(--bad) 10%, transparent);
+             box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bad) 35%, transparent); font-size: 14px; }
+
+  /* ---------- settings ---------- */
+  .settings { display: grid; gap: 16px; max-width: 760px; }
+  .key-row { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: end; padding: 18px; }
+  .key-row h3 { margin: 0; font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  .key-row p { margin: 4px 0 12px; color: var(--muted); font-size: 14px; }
+  .key-row .state { font-size: 12px; font-weight: 600; padding: 2px 9px; border-radius: 99px; }
+  .state.on { color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); }
+  .state.off { color: var(--faint); background: var(--sunk); }
+
+  /* ---------- toast ---------- */
+  .toasts { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); display: grid; gap: 8px; z-index: 40; }
+  .toast { padding: 10px 16px; border-radius: 99px; background: var(--ink); color: var(--bg); font-weight: 500; font-size: 14px;
+           box-shadow: var(--shadow); animation: rise .35s var(--ease); display: flex; gap: 8px; align-items: center; }
+  .toast.bad { background: var(--bad); color: #fff; }
+
+  /* ---------- small screens ---------- */
+  @media (max-width: 1080px) {
+    .create { grid-template-columns: 1fr; }
+    .side { position: static; }
+    .dbody { grid-template-columns: 1fr; overflow: auto; }
+    .stage-col { border-right: 0; border-bottom: 1px solid var(--line); justify-items: center; overflow: visible; }
+    .player video { max-height: 70dvh; }
+    .info-col { min-height: auto; }
+  }
+  @media (max-width: 760px) {
+    .app { grid-template-columns: 1fr; }
+    .rail { position: fixed; z-index: 15; top: auto; bottom: 0; left: 0; right: 0; height: auto; flex-direction: row;
+            padding: 8px; border-right: 0; border-top: 1px solid var(--line); justify-content: space-around; }
+    .brand, .rail-foot { display: none; }
+    .nav { flex-direction: column; gap: 2px; font-size: 11px; padding: 6px 14px; }
+    .nav .count { display: none; }
+    main { padding: 20px 16px 96px; }
+    .grid2 { grid-template-columns: 1fr; }
+    .grid { grid-template-columns: repeat(2, 1fr); gap: 12px; }
+    .search input { width: 100%; }
+    .toolbar, .search { width: 100%; }
+    .drawer { top: 0; right: 0; bottom: 0; width: 100vw; }
+    .drawer > .panel { border-radius: 0; }
+    .player video, .player.wait { width: min(280px, 70vw); }
+    .player.f-16-9 video, .player.f-1-1 video { width: calc(100vw - 36px); }
+    .key-row { grid-template-columns: 1fr; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <nav class="rail" aria-label="Main">
+    <div class="brand"><span class="mark"><i class="ph-fill ph-film-slate"></i></span>Reel Studio</div>
+    <a class="nav" href="#create" data-view="create"><i class="ph ph-sparkle"></i>Create</a>
+    <a class="nav" href="#library" data-view="library"><i class="ph ph-squares-four"></i>Library<span class="count" id="libCount" hidden></span></a>
+    <a class="nav" href="#settings" data-view="settings"><i class="ph ph-sliders-horizontal"></i>Settings</a>
+    <div class="rail-foot">
+      <div class="status" id="kStatus"><span class="dot"></span><span>Checking Kaggle...</span></div>
+      <div class="theme" role="group" aria-label="Theme">
+        <button data-theme="dark" title="Dark"><i class="ph ph-moon"></i></button>
+        <button data-theme="system" title="Match system"><i class="ph ph-desktop"></i></button>
+        <button data-theme="light" title="Light"><i class="ph ph-sun"></i></button>
+      </div>
+    </div>
+  </nav>
+
+  <main>
+    <!-- CREATE -->
+    <section class="view" id="v-create" hidden>
+      <div class="head">
+        <div>
+          <span class="eyebrow">New reel</span>
+          <h1>What should the reel be about?</h1>
+          <p class="lede">Research runs on this laptop, then a free Kaggle GPU writes the script, picks the best of 15 hooks and builds the video.</p>
+        </div>
+      </div>
+
+      <div id="signin" class="note" hidden><i class="ph ph-plug"></i><div><b>One-time step: connect Kaggle.</b>
+        Open a terminal in the <span class="mono">reel-studio</span> folder, run <span class="mono">.venv\Scripts\kaggle.exe auth login</span>,
+        approve it in your browser, then refresh this page.</div></div>
+
+      <div class="create">
+        <div class="shell"><form class="panel composer" id="form" autocomplete="off">
+          <div class="field topic-box">
+            <label for="topic">Topic <span class="opt">one per line makes several reels in one faster run</span></label>
+            <textarea class="input" id="topic" name="topic" rows="2" placeholder="Why octopuses have three hearts" required></textarea>
+            <span class="tip mono" id="topicCount"></span>
+          </div>
+
+          <div>
+            <div class="label">Type</div>
+            <div class="seg">
+              <input type="radio" name="mode" id="m-general" value="general" checked><label for="m-general"><i class="ph ph-book-open"></i>General</label>
+              <input type="radio" name="mode" id="m-news" value="news"><label for="m-news"><i class="ph ph-newspaper"></i>News, searches the web</label>
+            </div>
+          </div>
+
+          <div class="grid2">
+            <div class="field"><label for="hook_idea">Hook idea <span class="opt">optional</span></label>
+              <input class="input" id="hook_idea" name="hook_idea" maxlength="300" placeholder="Ask if a car can actually fly"></div>
+            <div class="field"><label for="voice">Voice</label>
+              <select class="input" id="voice" name="voice">
+                <option value="en-US-AndrewMultilingualNeural">Andrew, US, male</option>
+                <option value="en-US-AvaMultilingualNeural">Ava, US, female</option>
+                <option value="en-US-BrianMultilingualNeural">Brian, US, male</option>
+                <option value="en-US-EmmaMultilingualNeural">Emma, US, female</option>
+                <option value="en-IN-PrabhatNeural">Prabhat, Indian English, male</option>
+                <option value="en-IN-NeerjaExpressiveNeural">Neerja, Indian English, female</option>
+                <option value="en-GB-RyanNeural">Ryan, British, male</option>
+                <option value="en-GB-SoniaNeural">Sonia, British, female</option>
+                <option value="en-AU-WilliamMultilingualNeural">William, Australian, male</option>
+                <option value="en-AU-NatashaNeural">Natasha, Australian, female</option>
+              </select></div>
+          </div>
+
+          <div class="field"><label for="instructions">Instructions <span class="opt">optional: focus, audience, tone, things to avoid</span></label>
+            <textarea class="input" id="instructions" name="instructions" maxlength="1500" placeholder="Focus on the price and the thrusters. Aim it at teenagers. Don't mention the delays."></textarea></div>
+
+          <div class="grid2">
+            <div>
+              <div class="label">Format</div>
+              <div class="fmt">
+                <input type="radio" name="format" id="f916" value="9:16" checked><label for="f916"><span class="shape" style="width:12px;height:20px"></span>9:16 Reels</label>
+                <input type="radio" name="format" id="f11" value="1:1"><label for="f11"><span class="shape" style="width:17px;height:17px;margin:1.5px 0"></span>1:1 Square</label>
+                <input type="radio" name="format" id="f169" value="16:9"><label for="f169"><span class="shape" style="width:24px;height:14px;margin:3px 0"></span>16:9 YouTube</label>
+              </div>
+            </div>
+            <div class="field"><label for="music">Background music</label>
+              <select class="input" id="music" name="music">
+                <option value="off">Off</option><option value="upbeat">Upbeat</option><option value="calm">Calm</option>
+                <option value="curious">Curious</option><option value="dramatic">Dramatic</option><option value="tech">Tech</option>
+              </select></div>
+          </div>
+
+          <details class="more" id="sources">
+            <summary><i class="ph ph-paperclip"></i>Your own sources <span class="opt" id="srcSummary" style="color:var(--faint);font-weight:400">optional</span><i class="ph ph-caret-down chev"></i></summary>
+            <div class="inner">
+              <label class="drop" id="drop"><i class="ph ph-file-pdf"></i><span id="dropText">Drop PDFs here or click to choose. They need selectable text.</span>
+                <input type="file" id="pdfs" name="pdfs" accept="application/pdf" multiple hidden></label>
+              <div class="field"><label for="links">Links <span class="opt">one per line</span></label>
+                <textarea class="input" id="links" name="links" placeholder="https://..."></textarea></div>
+              <div class="field"><label for="pasted">Paste text <span class="opt">for pages that block programs or need a login</span></label>
+                <textarea class="input" id="pasted" name="pasted"></textarea></div>
+              <label class="check"><input type="checkbox" name="only_sources"><span>Only use my sources<small>Best for very new or niche news.</small></span></label>
+            </div>
+          </details>
+
+          <label class="check"><input type="checkbox" name="press_photos"><span>Also use photos from the news articles and links
+            <small>Usually copyrighted press photos. You decide whether you may use them.</small></span></label>
+
+          <div class="submit-row">
+            <span class="hint" id="eta">About 8 to 12 minutes per run</span>
+            <button class="btn" id="go" type="submit"><span id="goText">Make reel</span><span class="nub"><i class="ph-bold ph-arrow-right"></i></span></button>
+          </div>
+        </form></div>
+
+        <aside class="side">
+          <div class="shell"><div class="panel side-card">
+            <h3><i class="ph ph-hourglass-medium"></i>In progress <span class="n" id="qCount"></span></h3>
+            <div class="queue" id="queue"></div>
+          </div></div>
+          <div class="shell"><div class="panel side-card">
+            <h3><i class="ph ph-path"></i>How a reel is made</h3>
+            <ol class="steps">
+              <li><i class="ph ph-magnifying-glass"></i><span><b>Research</b>News, Wikipedia and your sources, on this laptop.</span></li>
+              <li><i class="ph ph-lightbulb"></i><span><b>15 hooks, top 3</b>The model writes and ranks hooks, then fact-checks the script.</span></li>
+              <li><i class="ph ph-images"></i><span><b>Photos and clips</b>Free sources, each checked by the model's eyes.</span></li>
+              <li><i class="ph ph-film-strip"></i><span><b>Video</b>Voice, captions and music, ready to download.</span></li>
+            </ol>
+          </div></div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- LIBRARY -->
+    <section class="view" id="v-library" hidden>
+      <div class="head">
+        <div><span class="eyebrow">Library</span><h1>Your reels</h1></div>
+        <div class="toolbar">
+          <div class="seg" id="filter">
+            <input type="radio" name="flt" id="fl-all" value="all" checked><label for="fl-all">All</label>
+            <input type="radio" name="flt" id="fl-done" value="done"><label for="fl-done">Ready</label>
+            <input type="radio" name="flt" id="fl-work" value="work"><label for="fl-work">In progress</label>
+            <input type="radio" name="flt" id="fl-err" value="error"><label for="fl-err">Failed or stopped</label>
+          </div>
+          <div class="search"><i class="ph ph-magnifying-glass"></i><input class="input" id="q" placeholder="Search topics"></div>
+          <button class="ghost danger" id="delFailed" hidden><i class="ph ph-broom"></i><span></span></button>
+          <button class="ghost" id="selectBtn"><i class="ph ph-check-square"></i>Select</button>
+        </div>
+      </div>
+      <div class="grid" id="grid"></div>
+    </section>
+
+    <!-- SETTINGS -->
+    <section class="view" id="v-settings" hidden>
+      <div class="head"><div><span class="eyebrow">Settings</span><h1>Photo and video sources</h1>
+        <p class="lede">Free keys unlock more pictures and short video clips. Keys stay in <span class="mono">config.json</span> on this laptop and are only sent to your private Kaggle run.</p></div></div>
+      <div class="settings" id="keys"></div>
+    </section>
+  </main>
+</div>
+
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer" aria-hidden="true"><div class="panel" id="dpanel"></div></aside>
+<div class="selbar" id="selbar" role="toolbar" aria-label="Selected reels">
+  <b id="selCount">0 selected</b>
+  <button class="ghost" id="selAll"><i class="ph ph-checks"></i>Select all shown</button>
+  <button class="ghost" id="selDownload"><i class="ph ph-download-simple"></i>Download</button>
+  <button class="ghost danger" id="selDelete"><i class="ph ph-trash"></i>Delete</button>
+  <button class="icon-btn" id="selCancel" aria-label="Stop selecting"><i class="ph ph-x"></i></button>
+</div>
+<div class="toasts" id="toasts" aria-live="polite"></div>
+
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+let JOBS = [], openId = null, tab = "script", lastDrawer = "";
+const working = j => j.status === "queued" || j.status === "working";
+const ended = j => j.status === "error" || j.status === "stopped";
+
+function toast(msg, bad) {
+  const t = document.createElement("div");
+  t.className = "toast" + (bad ? " bad" : "");
+  t.innerHTML = `<i class="ph ${bad ? "ph-warning-circle" : "ph-check-circle"}"></i>${esc(msg)}`;
+  $("#toasts").append(t); setTimeout(() => t.remove(), 4200);
+}
+
+/* ---------- theme ---------- */
+function setTheme(m) {
+  if (m === "system") document.documentElement.removeAttribute("data-theme"); else document.documentElement.dataset.theme = m;
+  $$(".theme button").forEach(b => b.classList.toggle("on", b.dataset.theme === m));
+  try { localStorage.setItem("theme", m); } catch (e) {}
+}
+$$(".theme button").forEach(b => b.onclick = () => setTheme(b.dataset.theme));
+try { setTheme(localStorage.getItem("theme") || "dark"); } catch (e) { setTheme("dark"); }
+
+/* ---------- routing ---------- */
+function route() {
+  const h = location.hash.slice(1) || "create";
+  const [view, id] = h.split("/");
+  const v = ["create", "library", "settings"].includes(view) ? view : (view === "reel" ? "library" : "create");
+  $$(".view").forEach(s => s.hidden = s.id !== "v-" + v);
+  $$(".nav").forEach(a => a.classList.toggle("on", a.dataset.view === v));
+  if (v === "settings") loadKeys();
+  if (v !== "library" && selecting) setSelecting(false);
+  if (view === "reel" && id) openDrawer(id); else closeDrawer(false);
+}
+addEventListener("hashchange", route);
+
+/* ---------- status ---------- */
+async function checkStatus() {
+  try {
+    const s = await (await fetch("/api/status")).json();
+    $("#signin").hidden = !!s.kaggle_user;
+    const busy = JOBS.some(working);
+    $("#kStatus").innerHTML = s.kaggle_user
+      ? `<span class="dot ${busy ? "busy" : "ok"}"></span><span>${busy ? "Kaggle is working" : "Kaggle connected"}<br><span class="mono" style="font-size:11px;color:var(--faint)">${esc(s.kaggle_user)}</span></span>`
+      : `<span class="dot bad"></span><span>Kaggle not connected</span>`;
+  } catch (e) {
+    $("#kStatus").innerHTML = `<span class="dot bad"></span><span>Website server is off</span>`;
+  }
+}
+
+/* ---------- create ---------- */
+const topicEl = $("#topic");
+topicEl.addEventListener("input", () => {
+  const n = topicEl.value.split("\n").filter(t => t.trim()).length;
+  $("#topicCount").textContent = n > 1 ? `${n} reels` : "";
+  $("#goText").textContent = n > 1 ? `Make ${n} reels` : "Make reel";
+});
+topicEl.addEventListener("keydown", e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) $("#form").requestSubmit(); });
+
+const pdfIn = $("#pdfs"), drop = $("#drop");
+function showPdfs() {
+  const n = pdfIn.files.length;
+  $("#dropText").textContent = n ? `${n} PDF${n > 1 ? "s" : ""}: ${[...pdfIn.files].map(f => f.name).join(", ")}` : "Drop PDFs here or click to choose. They need selectable text.";
+  updateSrcSummary();
+}
+function updateSrcSummary() {
+  const links = $("#links").value.split("\n").filter(l => l.trim().startsWith("http")).length;
+  const parts = [pdfIn.files.length && `${pdfIn.files.length} PDF`, links && `${links} link${links > 1 ? "s" : ""}`, $("#pasted").value.trim() && "pasted text"].filter(Boolean);
+  $("#srcSummary").textContent = parts.length ? parts.join(", ") : "optional";
+}
+pdfIn.onchange = showPdfs;
+$("#links").oninput = $("#pasted").oninput = updateSrcSummary;
+["dragenter", "dragover"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("over"); }));
+["dragleave", "drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", e => {
+  const dt = new DataTransfer();
+  [...e.dataTransfer.files].filter(f => f.name.toLowerCase().endsWith(".pdf")).forEach(f => dt.items.add(f));
+  pdfIn.files = dt.files; showPdfs();
+});
+
+$("#form").addEventListener("submit", async e => {
+  e.preventDefault();
+  $("#go").disabled = true;
+  try {
+    const r = await fetch("/api/jobs", { method: "POST", body: new FormData(e.target) });
+    const d = await r.json();
+    if (!r.ok) { toast(d.error || "Something went wrong", true); return; }
+    e.target.reset(); showPdfs(); topicEl.dispatchEvent(new Event("input"));
+    toast(d.ids.length > 1 ? `${d.ids.length} reels started` : "Reel started");
+    await refresh();
+  } catch (err) { toast("The website server is not running", true); }
+  finally { $("#go").disabled = false; }
+});
+
+/* ---------- progress ---------- */
+function progress(j) {
+  if (j.status === "done") return 100;
+  if (j.stage === "Researching") return 5;
+  if (j.stage === "Sending to Kaggle") return 10;
+  if (gpuWait(j)) return 12;  // no progress until Kaggle starts the run
+  if (j.kaggle_minutes != null) return Math.min(95, 10 + j.kaggle_minutes * 8);
+  return 2;
+}
+const gpuWait = j => (j.stage || "").startsWith("Waiting for a free");
+function stageText(j) {
+  if (gpuWait(j)) return j.stage;
+  if (j.kaggle_minutes != null && j.status === "working") return `On Kaggle${j.gpu ? ` (${j.gpu})` : ""}, ${j.kaggle_minutes} min`;
+  return j.stage || "Waiting in line";
+}
+function stageIcon(j) {
+  return j.stage === "Researching" ? "ph-magnifying-glass" : gpuWait(j) ? "ph-hourglass-medium" : j.kaggle_minutes != null ? "ph-cpu" : "ph-hourglass-medium";
+}
+
+function renderQueue() {
+  const q = JOBS.filter(working);
+  $("#qCount").textContent = q.length ? q.length : "";
+  $("#queue").innerHTML = q.length ? q.map(j => `
+    <div class="qitem" data-open="${esc(j.id)}">
+      <div class="t" style="display:flex;gap:8px;align-items:center"><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis">${esc(j.topic)}</span>
+        <button class="icon-btn" data-stop="${esc(j.id)}" title="Stop making this reel" aria-label="Stop making this reel" style="width:28px;height:28px"><i class="ph-fill ph-stop"></i></button></div>
+      <div class="s"><i class="ph ${stageIcon(j)}"></i>${esc(stageText(j))}${j.forced_hook ? " · chosen hook" : ""}</div>
+      <div class="bar"><i style="width:${progress(j)}%"></i></div>
+    </div>`).join("") : `<div class="empty-mini">Nothing running. New reels show up here while they are made.</div>`;
+}
+
+/* ---------- library ---------- */
+function ago(t) {
+  const m = Math.round((Date.now() / 1000 - t) / 60);
+  if (m < 1) return "just now"; if (m < 60) return `${m} min ago`;
+  const h = Math.round(m / 60); if (h < 24) return `${h} h ago`;
+  return new Date(t * 1000).toLocaleDateString();
+}
+function tileHTML(j) {
+  let thumb;
+  if (j.status === "done" && j.has_video) {
+    thumb = `<div class="thumb"><video src="/jobs/${esc(j.id)}/reel.mp4#t=1.2" muted playsinline preload="metadata"></video>
+      <span class="badge">${esc(j.format || "9:16")}${j.parent_id ? ` · remake` : ""}</span><span class="play"><i class="ph-fill ph-play"></i></span></div>`;
+  } else if (ended(j)) {
+    thumb = j.status === "stopped"
+      ? `<div class="thumb failed" style="color:var(--muted)"><div><i class="ph ph-stop-circle"></i><div>Stopped</div></div></div>`
+      : `<div class="thumb failed"><div><i class="ph ph-warning-circle"></i><div>Failed</div></div></div>`;
+  } else {
+    thumb = `<div class="thumb pending"><div class="stage"><i class="ph ${stageIcon(j)}"></i>${esc(stageText(j))}<div class="bar"><i style="width:${progress(j)}%"></i></div></div></div>`;
+  }
+  const sel = selected.has(j.id);
+  return `<div class="tile ${sel ? "sel" : ""}" data-open="${esc(j.id)}" role="button" tabindex="0"${selecting ? ` aria-pressed="${sel}"` : ""}>
+    ${selecting ? `<span class="tick"><i class="ph-bold ph-check"></i></span>` : ""}
+    ${!working(j) ? `<button class="tile-del" data-del="${esc(j.id)}" title="Delete this reel" aria-label="Delete this reel"><i class="ph ph-trash"></i></button>`
+                  : `<button class="tile-del" data-stop="${esc(j.id)}" title="Stop making this reel" aria-label="Stop making this reel"><i class="ph-fill ph-stop"></i></button>`}
+    ${thumb}
+    <span class="cap"><b>${esc(j.topic)}</b><span>${j.news ? "News" : "General"} · ${ago(j.created)}</span></span></div>`;
+}
+let selecting = false;
+const selected = new Set();
+function shown() {
+  const f = $("#filter input:checked").value, q = $("#q").value.trim().toLowerCase();
+  return JOBS.filter(j => (f === "all" || (f === "work" ? working(j) : f === "error" ? ended(j) : j.status === f)) && (!q || j.topic.toLowerCase().includes(q)));
+}
+function renderGrid(force) {
+  const list = shown();
+  const failed = JOBS.filter(ended).length;
+  $("#delFailed").hidden = !failed || selecting;
+  $("#delFailed span").textContent = `Delete ${failed} failed or stopped`;
+  $("#selectBtn").hidden = selecting;
+  $("#grid").classList.toggle("selecting", selecting);
+  for (const id of [...selected]) if (!JOBS.some(j => j.id === id)) selected.delete(id);
+  updateSelbar();
+  const keep = force !== true && $$("#grid video").some(v => !v.paused);
+  if (keep) return;
+  $("#grid").innerHTML = list.length ? list.map(tileHTML).join("") : (JOBS.length
+    ? `<div class="empty" style="grid-column:1/-1"><i class="ph ph-funnel-simple"></i><b>No reels match</b>Try another filter or search.</div>`
+    : `<div class="empty" style="grid-column:1/-1"><i class="ph ph-film-reel"></i><b>No reels yet</b>Make your first one on the Create page.<a class="ghost" href="#create" style="margin-top:6px"><i class="ph ph-sparkle"></i>Create a reel</a></div>`);
+  $$("#grid .tile video").forEach(v => {
+    const tile = v.closest(".tile");
+    tile.addEventListener("mouseenter", () => { v.currentTime = 0; v.play().catch(() => {}); });
+    tile.addEventListener("mouseleave", () => { v.pause(); v.currentTime = 1.2; });
+  });
+  const n = JOBS.length;
+  $("#libCount").hidden = !n; $("#libCount").textContent = n;
+}
+$$("#filter input").forEach(i => i.onchange = () => renderGrid(true));
+$("#q").oninput = () => renderGrid(true);
+function updateSelbar() {
+  $("#selbar").classList.toggle("on", selecting);
+  $("#selCount").textContent = `${selected.size} selected`;
+  const ids = [...selected];
+  $("#selDownload").disabled = !ids.some(id => JOBS.find(j => j.id === id)?.has_video);
+  $("#selDelete").disabled = !ids.some(id => { const j = JOBS.find(x => x.id === id); return j && !working(j); });
+}
+function setSelecting(on) { selecting = on; if (!on) selected.clear(); renderGrid(true); }
+$("#selectBtn").onclick = () => setSelecting(true);
+$("#selCancel").onclick = () => setSelecting(false);
+$("#selAll").onclick = () => { shown().forEach(j => selected.add(j.id)); renderGrid(true); };
+addEventListener("keydown", e => { if (e.key === "Escape" && selecting && !openId) setSelecting(false); });
+
+async function deleteReels(ids, what) {
+  if (!ids.length) return;
+  if (!confirm(`Delete ${what}? The videos and files are removed from this laptop.`)) return;
+  try {
+    const r = await (await fetch("/api/jobs/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids }) })).json();
+    r.deleted.forEach(id => selected.delete(id));
+    toast(`Deleted ${r.deleted.length} reel${r.deleted.length === 1 ? "" : "s"}` + (r.skipped.length ? `, skipped ${r.skipped.length} still being made` : ""));
+  } catch (e) { toast("The website server is not running", true); }
+  await refresh(); renderGrid(true);
+}
+$("#selDelete").onclick = () => {
+  const ids = [...selected].filter(id => { const j = JOBS.find(x => x.id === id); return j && !working(j); });
+  deleteReels(ids, `${ids.length} reel${ids.length === 1 ? "" : "s"}`);
+};
+$("#selDownload").onclick = () => {
+  const ids = [...selected].filter(id => JOBS.find(j => j.id === id)?.has_video);
+  location.href = ids.length === 1 ? `/jobs/${ids[0]}/reel.mp4?download=1` : "/api/download?ids=" + ids.join(",");
+  toast(ids.length === 1 ? "Downloading the reel" : `Downloading ${ids.length} reels as one zip`);
+};
+$("#delFailed").onclick = () => {
+  const ids = JOBS.filter(ended).map(j => j.id);
+  deleteReels(ids, `all ${ids.length} failed or stopped reel${ids.length === 1 ? "" : "s"}`);
+};
+
+document.addEventListener("click", e => {
+  const st = e.target.closest("[data-stop]");
+  if (st) { e.stopPropagation(); return stopReel(st.dataset.stop); }
+  const d = e.target.closest("[data-del]");
+  if (d) {
+    const j = JOBS.find(x => x.id === d.dataset.del);
+    return deleteReels([d.dataset.del], `"${j ? j.topic : "this reel"}"`);
+  }
+  const o = e.target.closest("[data-open]");
+  if (!o) return;
+  if (selecting && o.closest("#grid")) {
+    selected.has(o.dataset.open) ? selected.delete(o.dataset.open) : selected.add(o.dataset.open);
+    return renderGrid(true);
+  }
+  location.hash = "reel/" + o.dataset.open;
+});
+document.addEventListener("keydown", e => {
+  const t = e.target.closest && e.target.closest(".tile");
+  if (t && e.target === t && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); t.click(); }
+});
+
+/* ---------- drawer ---------- */
+function openDrawer(id) {
+  openId = id;
+  $("#drawer").classList.add("on"); $("#scrim").classList.add("on"); $("#drawer").setAttribute("aria-hidden", "false");
+  lastDrawer = ""; renderDrawer();
+}
+function closeDrawer(nav = true) {
+  if (!openId) return;
+  const v = $("#dpanel video"); if (v) v.pause();
+  openId = null;
+  $("#drawer").classList.remove("on"); $("#scrim").classList.remove("on"); $("#drawer").setAttribute("aria-hidden", "true");
+  if (nav && location.hash.startsWith("#reel/")) location.hash = "library";
+}
+$("#scrim").onclick = () => closeDrawer();
+addEventListener("keydown", e => { if (e.key === "Escape") closeDrawer(); });
+
+function linesHTML(s) {
+  return `<div class="screen-hook">${esc(s.hook || "")}</div>
+    <ol class="lines">${s.scenes.map((sc, i) => `<li class="${i === 0 ? "hook" : ""}"><span>${esc(sc[0])}</span>
+      ${s.line_sources?.[i] ? `<span class="tag">${esc(s.line_sources[i])}</span>` : "<span></span>"}
+      <span class="photo"><i class="ph ph-image"></i>${esc(sc[1])}</span></li>`).join("")}</ol>`;
+}
+function hooksHTML(j) {
+  const s = j.script || {}, opts = s.hook_options || [];
+  if (!opts.length) return `<div class="note"><i class="ph ph-info"></i><div>This reel was made before hook ranking existed, so there are no other hooks to choose from. Use <b>Remake</b> to get a new set.</div></div>`;
+  const used = s.hook_spoken || s.scenes?.[0]?.[0];
+  return `<div class="note"><i class="ph ph-lightbulb"></i><div>The model wrote 15 hooks and ranked these 3 best. Remaking keeps the same topic, sources and settings, and writes a new script around the hook you pick.</div></div>
+    <div class="hooks">${opts.map((h, i) => {
+      const isUsed = h.spoken === used;
+      return `<div class="hook-card ${isUsed ? "used" : ""}"><div class="rank">${i + 1}</div><div>
+        <div class="spoken">${esc(h.spoken)}</div>
+        <div class="scr">${esc(h.screen)}</div>
+        ${h.why ? `<div class="why">${esc(h.why)}</div>` : ""}
+        <div class="foot">${isUsed ? `<span class="used-label"><i class="ph-fill ph-check-circle"></i>Used in this reel</span>` : ""}
+          <button class="ghost" data-remake="${i}"><i class="ph ph-arrows-clockwise"></i>Remake with this hook</button></div>
+      </div></div>`;
+    }).join("")}</div>`;
+}
+function sourcesHTML(j) {
+  const src = j.script?.sources || [];
+  if (!src.length) return `<div class="note"><i class="ph ph-info"></i><div>No sources were used for this reel.</div></div>`;
+  return `<div class="note"><i class="ph ph-shield-check"></i><div>Check these before posting. Each script line is tagged with the source it came from.</div></div>
+    <ul class="srcs">${src.map(x => `<li><span class="tag">${esc(x.id)}</span>${x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.title)} <i class="ph ph-arrow-up-right"></i></a>` : esc(x.title)}</li>`).join("")}</ul>`;
+}
+function detailsHTML(j) {
+  const t = j.timings || {}, st = j.setup_timings || {};
+  const kv = [["Model", j.model], ["Total", j.total_minutes != null && j.total_minutes + " min"], ["Setup", t.setup != null && t.setup + " s"],
+              ["Script", t.script != null && t.script + " s"], ["Video", t.reel != null && t.reel + " s"],
+              ["Batch", j.batch?.length > 1 && `${j.batch.length} reels`]].filter(x => x[1]);
+  return `${kv.length ? `<div class="kv">${kv.map(([k, v]) => `<div><span>${k}</span><b>${esc(v)}</b></div>`).join("")}</div>` : ""}
+    ${Object.keys(st).length ? `<p class="hint">Setup steps: ${Object.entries(st).map(([k, v]) => `${esc(k)} ${v}s`).join(" · ")}</p>` : ""}
+    ${j.hook_idea ? `<p class="hint">Hook idea: ${esc(j.hook_idea)}</p>` : ""}
+    ${j.instructions ? `<p class="hint">Instructions: ${esc(j.instructions)}</p>` : ""}
+    <pre class="log">${esc((j.log || []).join("\n") || "No log yet.")}</pre>`;
+}
+
+function stoppedHTML(j) {
+  const kaggle = j.kaggle_started && j.kaggle_url;
+  return `<div class="note"><i class="ph ph-stop-circle"></i><div>You stopped this reel. Remake starts it again with the same settings.${kaggle
+    ? `<br><br><b>Kaggle can't be stopped from here.</b> If this run is still queued or running there, open the notebook and press Stop so it doesn't use GPU hours.
+       <div style="margin-top:10px"><a class="ghost" href="${esc(j.kaggle_url)}" target="_blank" rel="noopener"><i class="ph ph-arrow-square-out"></i>Open on Kaggle</a></div>` : ""}</div></div>`;
+}
+
+async function stopReel(id) {
+  const j = JOBS.find(x => x.id === id);
+  if (!confirm(`Stop making "${j ? j.topic : "this reel"}"?`)) return;
+  try {
+    const res = await fetch(`/api/jobs/${id}/stop`, { method: "POST" });
+    const d = await res.json();
+    if (!res.ok) return toast(d.error || "Could not stop it", true);
+    toast(d.on_kaggle ? "Stopped here. Also stop it on Kaggle to save GPU hours" : d.shared_with
+      ? "Stopped. Kaggle keeps making the other reels in the same run" : "Reel stopped");
+  } catch (e) { return toast("The website server is not running", true); }
+  await refresh(); renderGrid(true);
+}
+
+function renderDrawer() {
+  if (!openId) return;
+  const j = JOBS.find(x => x.id === openId);
+  const key = JSON.stringify([j, tab]);
+  if (key === lastDrawer) return;
+  const v = $("#dpanel video");
+  if (v && !v.paused && j && lastDrawer && JSON.parse(lastDrawer)[0]?.status === j.status) return; // don't interrupt playback
+  lastDrawer = key;
+  if (!j) { $("#dpanel").innerHTML = `<div class="dhead"><h2>Not found</h2><button class="icon-btn" data-close><i class="ph ph-x"></i></button></div><div class="empty">This reel no longer exists.</div>`; return; }
+  const fmt = (j.format || "9:16").replace(":", "-");
+  const done = j.status === "done" && j.has_video;
+  const player = done
+    ? `<div class="player f-${esc(fmt)}"><video src="/jobs/${esc(j.id)}/reel.mp4" controls playsinline preload="metadata"></video></div>`
+    : ended(j)
+      ? (j.status === "stopped"
+        ? `<div class="player wait"><div><i class="ph ph-stop-circle" style="font-size:28px"></i><div>You stopped this reel.</div></div></div>`
+        : `<div class="player wait"><div><i class="ph ph-warning-circle" style="font-size:28px;color:var(--bad)"></i><div>This reel failed.</div></div></div>`)
+      : `<div class="player wait thumb pending" style="border-radius:14px"><div class="stage"><i class="ph ${stageIcon(j)}"></i>${esc(stageText(j))}<div class="bar"><i style="width:${progress(j)}%"></i></div></div></div>`;
+  const opts = j.script?.hook_options?.length || 0;
+  const tabs = [["script", "ph-text-align-left", "Script"], ["hooks", "ph-lightbulb", "Hooks", opts], ["sources", "ph-books", "Sources", j.script?.sources?.length], ["details", "ph-list-magnifying-glass", "Details"]];
+  let pane;
+  if (!done && tab !== "details") {
+    pane = j.status === "stopped" ? stoppedHTML(j) : j.status === "error" ? `<div class="err-box">${esc(j.error || "Unknown error")}</div><p class="hint">Open Details for the full log. Remake tries again with the same settings.</p>`
+      : `<div class="note"><i class="ph ph-hourglass-medium"></i><div>${j.forced_hook ? `Remaking with the hook: <b>${esc(j.forced_hook.spoken)}</b><br>` : ""}The script, hooks and sources appear here when the reel is ready. Kaggle runs usually take 8 to 12 minutes.</div></div>`;
+  } else pane = tab === "script" ? linesHTML(j.script) : tab === "hooks" ? hooksHTML(j) : tab === "sources" ? sourcesHTML(j) : detailsHTML(j);
+  const parent = j.parent_id && JOBS.find(x => x.id === j.parent_id);
+  $("#dpanel").innerHTML = `
+    <div class="dhead"><button class="icon-btn" data-close aria-label="Close"><i class="ph ph-x"></i></button>
+      <h2>${esc(j.topic)}</h2></div>
+    <div class="dbody">
+      <div class="stage-col">
+        ${player}
+        <div class="row-btns">
+          ${done ? `<a class="ghost" href="/jobs/${esc(j.id)}/reel.mp4?download=1"><i class="ph ph-download-simple"></i>Download</a>
+                    <a class="ghost" href="/jobs/${esc(j.id)}/photo_credits.txt" target="_blank"><i class="ph ph-copyright"></i>Credits</a>` : ""}
+          ${working(j) ? `<button class="ghost danger" data-stop="${esc(j.id)}"><i class="ph-fill ph-stop"></i>Stop</button>` : ""}
+          ${!working(j) ? `<button class="ghost" data-remake="new"><i class="ph ph-arrows-clockwise"></i>Remake</button>
+                           <button class="ghost danger" data-delete title="Delete"><i class="ph ph-trash"></i></button>` : ""}
+        </div>
+        <dl class="facts">
+          <dt>Type</dt><dd>${j.news ? "News" : "General"}${j.only_sources ? ", only my sources" : ""}</dd>
+          <dt>Format</dt><dd>${esc(j.format || "9:16")}</dd>
+          <dt>Music</dt><dd>${esc(j.music && j.music !== "off" ? j.music : "Off")}</dd>
+          ${j.gpu ? `<dt>GPU</dt><dd>${esc(j.gpu)}${j.model ? `, ${esc(j.model)}` : ""}</dd>` : ""}
+          <dt>Made</dt><dd>${new Date(j.created * 1000).toLocaleString()}</dd>
+          ${j.parent_id ? `<dt>Remake of</dt><dd>${parent ? `<a href="#reel/${esc(parent.id)}">${esc(parent.topic)}</a>` : "an earlier reel"}</dd>` : ""}
+        </dl>
+      </div>
+      <div class="info-col">
+        <div class="tabs" role="tablist">${tabs.map(([k, ic, label, n]) => `<button class="tab ${tab === k ? "on" : ""}" data-tab="${k}" role="tab"><i class="ph ${ic}"></i>${label}${n ? `<span class="pip">${n}</span>` : ""}</button>`).join("")}</div>
+        <div class="pane">${pane}</div>
+      </div>
+    </div>`;
+}
+$("#dpanel").addEventListener("click", async e => {
+  if (e.target.closest("[data-close]")) return closeDrawer();
+  const t = e.target.closest("[data-tab]");
+  if (t) { tab = t.dataset.tab; lastDrawer = ""; return renderDrawer(); }
+  const r = e.target.closest("[data-remake]");
+  if (r) {
+    r.disabled = true;
+    const body = r.dataset.remake === "new" ? {} : { hook: +r.dataset.remake };
+    try {
+      const res = await fetch(`/api/jobs/${openId}/remake`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const d = await res.json();
+      if (!res.ok) { toast(d.error || "Could not start the remake", true); r.disabled = false; return; }
+      toast(body.hook != null ? "Remaking with that hook" : "Remake started");
+      await refresh(); tab = "script"; location.hash = "reel/" + d.id;
+    } catch (err) { toast("The website server is not running", true); r.disabled = false; }
+    return;
+  }
+  if (e.target.closest("[data-delete]")) {
+    if (!confirm("Delete this reel and its files from this laptop?")) return;
+    const res = await fetch(`/api/jobs/${openId}`, { method: "DELETE" });
+    if (res.ok) { toast("Reel deleted"); closeDrawer(); await refresh(); } else toast((await res.json()).error || "Could not delete", true);
+  }
+});
+
+/* ---------- settings ---------- */
+const KEYS = [
+  ["flickr_api_key", "Flickr", "ph-camera", "Creative Commons photos, including recent events.", "https://www.flickr.com/services/apps/create/apply/"],
+  ["pexels_api_key", "Pexels", "ph-video-camera", "Free stock video clips and photos.", "https://www.pexels.com/api/"],
+  ["pixabay_api_key", "Pixabay", "ph-film-strip", "More free stock video clips.", "https://pixabay.com/api/docs/"],
+];
+async function loadKeys() {
+  let s = {};
+  try { s = await (await fetch("/api/settings")).json(); } catch (e) {}
+  $("#keys").innerHTML = KEYS.map(([k, name, ic, desc, url]) => `
+    <div class="shell"><div class="panel key-row">
+      <div><h3><i class="ph ${ic}"></i>${name}<span class="state ${s[k] ? "on" : "off"}">${s[k] ? "Key saved" : "Off"}</span></h3>
+        <p>${desc} <a href="${url}" target="_blank" rel="noopener">Get a free key <i class="ph ph-arrow-up-right"></i></a></p>
+        <input class="input mono" type="password" data-key="${k}" placeholder="${s[k] ? "Paste a new key to replace it" : "Paste your " + name + " key"}" autocomplete="off"></div>
+      <div class="row-btns"><button class="ghost" data-save="${k}"><i class="ph ph-floppy-disk"></i>Save</button>
+        ${s[k] ? `<button class="ghost danger" data-clear="${k}"><i class="ph ph-x"></i>Remove</button>` : ""}</div>
+    </div></div>`).join("") + `<p class="hint">Without keys, photos come from Wikipedia, Wikimedia Commons, Openverse and NASA.</p>`;
+}
+$("#keys").addEventListener("click", async e => {
+  const b = e.target.closest("[data-save],[data-clear]");
+  if (!b) return;
+  const k = b.dataset.save || b.dataset.clear;
+  const v = b.dataset.clear ? "-" : $(`[data-key="${k}"]`).value.trim();
+  if (!v) return toast("Paste a key first", true);
+  await fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ [k]: v }) });
+  toast(b.dataset.clear ? "Key removed" : "Key saved"); loadKeys();
+});
+
+/* ---------- polling ---------- */
+async function refresh() {
+  try {
+    JOBS = await (await fetch("/api/jobs")).json();
+    renderQueue(); renderGrid(); renderDrawer();
+  } catch (e) {}
+}
+route(); checkStatus(); refresh();
+setInterval(refresh, 5000); setInterval(checkStatus, 30000);
+</script>
+</body>
+</html>
