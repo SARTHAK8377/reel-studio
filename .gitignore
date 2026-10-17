@@ -1,0 +1,14 @@
+# private settings and keys
+config.json
+auth_log.txt
+
+# your reels, scripts and uploaded PDFs
+jobs/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# empty leftover folder
+static/
