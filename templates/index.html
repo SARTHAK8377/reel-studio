@@ -126,6 +126,11 @@
   .check { display: flex; gap: 10px; align-items: flex-start; font-size: 14px; cursor: pointer; }
   .check input { accent-color: var(--accent); margin-top: 3px; }
   .check small { display: block; color: var(--faint); }
+  .voice-row { display: flex; gap: 8px; }
+  .voice-row select { flex: 1; min-width: 0; }
+  .voice-play { flex: none; border-radius: 10px; }
+  .voice-play.busy i { animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
   .submit-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
   .hint { color: var(--faint); font-size: 13px; }
 
@@ -395,6 +400,7 @@
             <div class="field"><label for="hook_idea">Hook idea <span class="opt">optional</span></label>
               <input class="input" id="hook_idea" name="hook_idea" maxlength="300" placeholder="Ask if a car can actually fly"></div>
             <div class="field"><label for="voice">Voice</label>
+              <div class="voice-row">
               <select class="input" id="voice" name="voice">
                 <option value="en-US-AndrewMultilingualNeural">Andrew, US, male</option>
                 <option value="en-US-AvaMultilingualNeural">Ava, US, female</option>
@@ -406,7 +412,9 @@
                 <option value="en-GB-SoniaNeural">Sonia, British, female</option>
                 <option value="en-AU-WilliamMultilingualNeural">William, Australian, male</option>
                 <option value="en-AU-NatashaNeural">Natasha, Australian, female</option>
-              </select></div>
+              </select>
+              <button type="button" class="ghost voice-play" id="voicePlay" aria-label="Hear this voice"><i class="ph-fill ph-play"></i><span>Hear it</span></button>
+              </div></div>
           </div>
 
           <div class="field"><label for="instructions">Instructions <span class="opt">optional: focus, audience, tone, things to avoid</span></label>
@@ -559,6 +567,25 @@ async function checkStatus() {
 }
 
 /* ---------- create ---------- */
+// "Hear it": plays a short sample of the chosen voice (made once per voice on this laptop, then reused)
+const sample = new Audio();
+function voiceButton(state) {
+  const b = $("#voicePlay");
+  b.classList.toggle("busy", state === "loading");
+  b.querySelector("i").className = state === "loading" ? "ph ph-circle-notch" : state === "playing" ? "ph-fill ph-stop" : "ph-fill ph-play";
+  b.querySelector("span").textContent = state === "loading" ? "Loading" : state === "playing" ? "Stop" : "Hear it";
+}
+$("#voicePlay").onclick = () => {
+  if (!sample.paused) { sample.pause(); sample.currentTime = 0; return voiceButton("idle"); }
+  voiceButton("loading");
+  sample.src = `/api/voice-preview/${encodeURIComponent($("#voice").value)}`;
+  sample.play().catch(() => voiceButton("idle"));
+};
+sample.onplaying = () => voiceButton("playing");
+sample.onended = sample.onpause = () => voiceButton("idle");
+sample.onerror = () => { voiceButton("idle"); toast("Could not make the voice sample. Is the internet on?", true); };
+$("#voice").addEventListener("change", () => { if (!sample.paused) { sample.pause(); voiceButton("idle"); } });
+
 const topicEl = $("#topic");
 topicEl.addEventListener("input", () => {
   const n = topicEl.value.split("\n").filter(t => t.trim()).length;
