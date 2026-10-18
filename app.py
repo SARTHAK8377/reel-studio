@@ -277,18 +277,37 @@ def collect(job, res_dir, status, batch_log):
         fail(job, RuntimeError("The Kaggle run failed: " + res.get("error", f"no result ({status})")))
 
 
-def worker_loop():
+def next_job(block=True):
+    """The next reel in line, skipping any deleted while waiting (stopped, then deleted). None if the line is empty."""
     while True:
-        jobs = [load(work_queue.get())]
-        time.sleep(3)  # a moment for more topics to arrive, so they can share the run
-        while len(jobs) < MAX_BATCH and not work_queue.empty():
-            jobs.append(load(work_queue.get()))
         try:
+            jid = work_queue.get(block=block)
+        except queue.Empty:
+            return None
+        if job_path(jid).exists():
+            return load(jid)
+
+
+def worker_loop():
+    while True:  # nothing below may end this loop: if it did, no reel would ever start again
+        jobs = []
+        try:
+            jobs = [next_job()]
+            time.sleep(3)  # a moment for more topics to arrive, so they can share the run
+            while len(jobs) < MAX_BATCH:
+                job = next_job(block=False)
+                if job is None:
+                    break
+                jobs.append(job)
             run_batch(jobs)
         except Exception as e:
+            traceback.print_exc()
             for job in jobs:
-                if load(job["id"]).get("status") not in ("done", "error", "stopped"):
-                    fail(job, e)
+                try:
+                    if job_path(job["id"]).exists() and load(job["id"]).get("status") not in ("done", "error", "stopped"):
+                        fail(job, e)
+                except Exception:
+                    traceback.print_exc()
 
 
 # ---------- web pages ----------
@@ -508,10 +527,13 @@ def save_settings():
 
 
 def resume_unfinished():
-    """After a restart, jobs that never finished are marked so you can retry them."""
-    for p in JOBS.glob("*/job.json"):
+    """After a restart: reels still waiting in line go back in line (nothing was started for them yet);
+    reels that were being made are marked stopped, so you can remake them."""
+    for p in sorted(JOBS.glob("*/job.json")):
         j = json.loads(p.read_text(encoding="utf-8"))
-        if j.get("status") in ("queued", "working"):
+        if j.get("status") == "queued" and not j.get("stopped"):
+            work_queue.put(j["id"])
+        elif j.get("status") in ("queued", "working"):
             j.update(status="stopped", stopped=True, stage="Stopped",
                      error="The website was closed before this reel finished." +
                            (" Kaggle may still run it; stop it on the Kaggle page to save GPU hours." if j.get("kaggle_started") else ""))
