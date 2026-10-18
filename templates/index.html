@@ -660,6 +660,16 @@ function tileHTML(j) {
     ${thumb}
     <span class="cap"><b>${esc(j.topic)}</b><span>${j.news ? "News" : "General"} · ${ago(j.created)}</span></span></div>`;
 }
+function tileKey(j) {  // everything a tile shows, except the "5 min ago" text (updated in place)
+  return JSON.stringify([j.status, j.has_video, j.format, j.parent_id, j.topic, j.news,
+                         working(j) ? [stageText(j), progress(j)] : 0, selecting, selected.has(j.id)]);
+}
+function bindPreview(tile) {  // play the reel silently while the mouse is over its tile
+  const v = tile.querySelector("video");
+  if (!v) return;
+  tile.addEventListener("mouseenter", () => { v.currentTime = 0; v.play().catch(() => {}); });
+  tile.addEventListener("mouseleave", () => { v.pause(); v.currentTime = 1.2; });
+}
 let selecting = false;
 const selected = new Set();
 function shown() {
@@ -675,16 +685,39 @@ function renderGrid(force) {
   $("#grid").classList.toggle("selecting", selecting);
   for (const id of [...selected]) if (!JOBS.some(j => j.id === id)) selected.delete(id);
   updateSelbar();
-  const keep = force !== true && $$("#grid video").some(v => !v.paused);
-  if (keep) return;
-  $("#grid").innerHTML = list.length ? list.map(tileHTML).join("") : (JOBS.length
-    ? `<div class="empty" style="grid-column:1/-1"><i class="ph ph-funnel-simple"></i><b>No reels match</b>Try another filter or search.</div>`
-    : `<div class="empty" style="grid-column:1/-1"><i class="ph ph-film-reel"></i><b>No reels yet</b>Make your first one on the Create page.<a class="ghost" href="#create" style="margin-top:6px"><i class="ph ph-sparkle"></i>Create a reel</a></div>`);
-  $$("#grid .tile video").forEach(v => {
-    const tile = v.closest(".tile");
-    tile.addEventListener("mouseenter", () => { v.currentTime = 0; v.play().catch(() => {}); });
-    tile.addEventListener("mouseleave", () => { v.pause(); v.currentTime = 1.2; });
-  });
+  const grid = $("#grid");
+  if (!list.length) {
+    grid.innerHTML = JOBS.length
+      ? `<div class="empty" style="grid-column:1/-1"><i class="ph ph-funnel-simple"></i><b>No reels match</b>Try another filter or search.</div>`
+      : `<div class="empty" style="grid-column:1/-1"><i class="ph ph-film-reel"></i><b>No reels yet</b>Make your first one on the Create page.<a class="ghost" href="#create" style="margin-top:6px"><i class="ph ph-sparkle"></i>Create a reel</a></div>`;
+  } else {
+    // Update tiles in place: a tile is only rebuilt when what it shows changes, so finished reels keep
+    // their loaded video thumbnail instead of reloading (and flashing black) on every 5-second refresh.
+    grid.querySelector(".empty")?.remove();
+    const existing = new Map([...grid.children].filter(el => el.dataset.open).map(el => [el.dataset.open, el]));
+    let prev = null;
+    for (const j of list) {
+      const key = tileKey(j);
+      let el = existing.get(j.id);
+      existing.delete(j.id);
+      if (!el || el.dataset.key !== key) {
+        const t = document.createElement("template");
+        t.innerHTML = tileHTML(j).trim();
+        const fresh = t.content.firstElementChild;
+        fresh.dataset.key = key;
+        bindPreview(fresh);
+        if (el) el.replaceWith(fresh);
+        el = fresh;
+      }
+      const at = prev ? prev.nextElementSibling : grid.firstElementChild;
+      if (at !== el) grid.insertBefore(el, at);
+      const when = el.querySelector(".cap span");
+      const text = `${j.news ? "News" : "General"} · ${ago(j.created)}`;
+      if (when && when.textContent !== text) when.textContent = text;
+      prev = el;
+    }
+    existing.forEach(el => el.remove());
+  }
   const n = JOBS.length;
   $("#libCount").hidden = !n; $("#libCount").textContent = n;
 }
