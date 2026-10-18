@@ -12,3 +12,6 @@ __pycache__/
 
 # empty leftover folder
 static/
+
+# cached voice samples (made on demand)
+voice_previews/

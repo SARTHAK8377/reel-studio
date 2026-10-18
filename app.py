@@ -461,6 +461,29 @@ def download_many():
                      download_name=f"reels-{datetime.now():%Y%m%d-%H%M}.zip")
 
 
+PREVIEWS = HERE / "voice_previews"
+PREVIEW_TEXT = "Hello! This is how your reel will sound."
+
+
+@app.get("/api/voice-preview/<voice>")
+def voice_preview(voice):
+    """A short sample of an edge-tts voice, made once per voice and then reused (same speed as the reels)."""
+    if not re.fullmatch(r"[a-z]{2}-[A-Z]{2}-[A-Za-z]+Neural", voice):
+        abort(404)
+    path = PREVIEWS / f"{voice}.mp3"
+    if not path.exists():
+        import asyncio, edge_tts
+        PREVIEWS.mkdir(exist_ok=True)
+        tmp = path.with_suffix(".part")
+        try:
+            asyncio.run(edge_tts.Communicate(PREVIEW_TEXT, voice, rate="+10%").save(str(tmp)))
+            tmp.replace(path)
+        except Exception as e:
+            tmp.unlink(missing_ok=True)
+            return jsonify({"error": f"Could not make the voice sample ({e}). Is the internet on?"}), 502
+    return send_from_directory(PREVIEWS, path.name, mimetype="audio/mpeg", max_age=86400)
+
+
 KEY_NAMES = ("flickr_api_key", "pexels_api_key", "pixabay_api_key")
 
 
@@ -495,7 +518,19 @@ def resume_unfinished():
             p.write_text(json.dumps(j, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
+def already_running(port=5050):
+    """Windows lets a second copy listen on the same port silently; two copies would fight over the same reels."""
+    import socket
+    with socket.socket() as s:
+        s.settimeout(1)
+        return s.connect_ex(("127.0.0.1", port)) == 0
+
+
 if __name__ == "__main__":
+    if already_running():
+        print("Reel Studio is already running: open http://127.0.0.1:5050\n"
+              "To restart it, close the other Reel Studio window first.")
+        sys.exit(1)
     JOBS.mkdir(exist_ok=True)
     resume_unfinished()
     threading.Thread(target=worker_loop, daemon=True).start()

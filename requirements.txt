@@ -2,3 +2,4 @@ flask>=3.0
 trafilatura>=2.0
 pypdf>=5.0
 kaggle>=2.2
+edge-tts>=7.0
