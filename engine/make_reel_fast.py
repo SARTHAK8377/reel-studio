@@ -234,8 +234,11 @@ Look carefully and answer three things:
    new sports car, a different species, model or person).
 3. "score" 0-10 for how well it fits what the narrator says at that moment
    (10 = exactly what is being talked about, 6 = clearly the right thing, 3 = loosely related, 0 = unrelated).
+4. "subject_x" and "subject_y": where the centre of the main subject is (a person's face, the car, the animal),
+   in percent from the left edge and from the top edge (50, 50 = the middle). Used to crop around it.
 Be strict: a wrong pick looks unprofessional.
-Return JSON: {{"real_photo": true/false, "right_subject": true/false, "score": <0-10>, "shows": "<a few words>"}}"""
+Return JSON: {{"real_photo": true/false, "right_subject": true/false, "score": <0-10>, "shows": "<a few words>",
+"subject_x": <0-100>, "subject_y": <0-100>}}"""
     body = json.dumps({"model": VISION_MODEL, "prompt": prompt, "images": [base64.b64encode(buf.getvalue()).decode()],
                        "format": "json", "stream": False,
                        "options": {"temperature": 0, "num_ctx": 12288}}).encode()  # same as the writer: no model reload
@@ -244,6 +247,10 @@ Return JSON: {{"real_photo": true/false, "right_subject": true/false, "score": <
         data = json.loads(json.loads(urllib.request.urlopen(req, timeout=180).read())["response"])
         score = max(0, min(10, int(float(str(data.get("score", 0)).split("/")[0]))))
         shows = str(data.get("shows", ""))[:60]
+        try:  # where the subject is, so a crop keeps it (kept on the image object, saved next to the photo)
+            img.info["focus"] = [max(0.0, min(1.0, float(data[k]) / 100)) for k in ("subject_x", "subject_y")]
+        except (KeyError, TypeError, ValueError):
+            pass
         yes = lambda v: str(v).strip().lower() in ("true", "yes", "1")
         if not yes(data.get("right_subject", True)):
             score, shows = min(score, 2), shows + " [wrong subject]"
@@ -349,6 +356,7 @@ def fetch_photo(i, line, query, must_word, used):
             img.save(path, quality=95)
         used.add(r["key"])
         credit_path.write_text(r["credit"], encoding="utf-8")
+        framing_path(path).write_text(json.dumps({"size": list(img.size), "focus": img.info.get("focus")}))
         print(f"photo {i} ok ({score}/10): {'video ' if r.get('video') else ''}{r['title'][:80]!r} {img.size}", flush=True)
         return path, r["credit"]
     if best:
@@ -360,6 +368,8 @@ def fetch_photo(i, line, query, must_word, used):
         path.write_bytes(earlier[-1].read_bytes())
         credit = earlier[-1].with_suffix(".txt").read_text(encoding="utf-8")
         credit_path.write_text(credit, encoding="utf-8")
+        if framing_path(earlier[-1]).exists():
+            framing_path(path).write_text(framing_path(earlier[-1]).read_text())
         return path, credit
     # very last resort: a plain dark background, so the reel still gets made
     print(f"photo {i}: no photo at all, using a plain background", flush=True)
@@ -535,14 +545,87 @@ def build_overlay_track(si, words, dur, work):
 
 # ---------- background photo + zoom ----------
 
-def prep_image(path, out_path):
-    """Cover-fit to exactly 9:16 at SS x 1.15 the frame (room to zoom and pan), with the dark caption vignette."""
-    img = Image.open(path).convert("RGB")
-    tw, th = int(W * 1.15 * SS), int(H * 1.15 * SS)
+FIT_BELOW = 0.6   # if filling the frame would keep less than this share of the photo, show it whole instead
+FIT_SIZE = 0.88   # a whole photo fills this share of the canvas, so the zoom barely touches its edges
+FIT_ZOOM = 0.4    # zoom amount for whole photos, compared with full-frame photos
+FIT_SHAPE = 4 / 3 # a very wide photo is trimmed to this shape (around its subject) so it shows bigger; 16:9 keeps 75%
+
+
+def framing_path(photo):
+    return Path(photo).with_name(Path(photo).stem + "_framing.json")
+
+
+def framing(photo):
+    """(width, height, focus) saved when the photo was chosen; focus is the subject's centre as 0-1 fractions."""
+    try:
+        f = json.loads(framing_path(photo).read_text())
+        return f["size"][0], f["size"][1], f.get("focus")
+    except (OSError, ValueError, KeyError, TypeError):
+        return None, None, None
+
+
+def kept_share(width, height):
+    """How much of a width x height photo stays visible if it is cropped to fill the frame."""
+    a, fa = width / height, W / H
+    return min(a / fa, fa / a)
+
+
+def cover_crop(img, tw, th, focus=None):
+    """Scale to fill tw x th, then crop around the subject (focus) instead of always the middle."""
     s = max(tw / img.width, th / img.height)
     img = img.resize((max(tw, round(img.width * s)), max(th, round(img.height * s))), Image.LANCZOS)
-    left, top = (img.width - tw) // 2, (img.height - th) // 2
-    img = img.crop((left, top, left + tw, top + th))
+    fx, fy = focus or (0.5, 0.45)
+    left = min(max(0, round(fx * img.width - tw / 2)), img.width - tw)
+    top = min(max(0, round(fy * img.height - th / 2)), img.height - th)
+    return img.crop((left, top, left + tw, top + th))
+
+
+def trim_bars(img, focus=None):
+    """Cut off black bars baked into a photo (video screenshots often have them). Returns (image, focus)."""
+    mask = img.convert("L").point(lambda v: 255 if v > 24 else 0)
+    box = mask.getbbox()
+    if not box or (box[2] - box[0]) * (box[3] - box[1]) < 0.5 * img.width * img.height or box == (0, 0, *img.size):
+        return img, focus
+    if focus:
+        focus = [min(1, max(0, (focus[0] * img.width - box[0]) / (box[2] - box[0]))),
+                 min(1, max(0, (focus[1] * img.height - box[1]) / (box[3] - box[1])))]
+    return img.crop(box), focus
+
+
+def prep_image(path, out_path):
+    """Make the scene's background at SS x 1.15 the frame (room to zoom and pan), with the dark caption vignette.
+    Photos close to the frame's shape fill it, cropped around the subject. Much wider (or taller) photos are shown
+    nearly whole, on a blurred and darkened copy of themselves, so a wide news photo isn't cut down to a sliver.
+    Returns "fit" or "fill"."""
+    img = Image.open(path).convert("RGB")
+    tw, th = int(W * 1.15 * SS), int(H * 1.15 * SS)
+    _, _, focus = framing(path)
+    img, focus = trim_bars(img, focus)
+    if kept_share(*img.size) >= FIT_BELOW:
+        mode, img = "fill", cover_crop(img, tw, th, focus)
+    else:
+        mode = "fit"
+        back = cover_crop(img, tw // 8, th // 8).filter(ImageFilter.GaussianBlur(6))
+        a = img.width / img.height
+        if W < H and a > FIT_SHAPE:  # wide photo in a tall reel: trim the sides around the subject
+            cw = round(img.height * FIT_SHAPE)
+            img = cover_crop(img, cw, img.height, focus)
+        elif W > H and a < 1 / FIT_SHAPE:  # tall photo in a wide video: trim top and bottom
+            ch = round(img.width * FIT_SHAPE)
+            img = cover_crop(img, img.width, ch, focus)
+        back = Image.eval(back, lambda v: int(v * 0.55)).resize((tw, th), Image.BILINEAR)
+        s = min(tw * FIT_SIZE / img.width, th * FIT_SIZE / img.height)
+        front = img.resize((round(img.width * s), round(img.height * s)), Image.LANCZOS)
+        x, y = (tw - front.width) // 2, round((th - front.height) * 0.45)  # a little above the middle: captions sit low
+        shadow = Image.new("L", (tw // 4, th // 4), 0)
+        ImageDraw.Draw(shadow).rectangle([x // 4, (y + 8 * SS) // 4, (x + front.width) // 4, (y + front.height + 8 * SS) // 4],
+                                         fill=150)
+        shadow = shadow.filter(ImageFilter.GaussianBlur(10)).resize((tw, th), Image.BILINEAR)
+        back = Image.composite(Image.new("RGB", (tw, th), (0, 0, 0)), back, shadow)
+        corners = Image.new("L", front.size, 0)
+        ImageDraw.Draw(corners).rounded_rectangle([0, 0, front.width - 1, front.height - 1], radius=18 * SS, fill=255)
+        back.paste(front, (x, y), corners)
+        img = back
     # blur the vignette mask at quarter size (much faster), then scale it up
     small = Image.new("L", (tw // 4, th // 4), 0)
     d = ImageDraw.Draw(small)
@@ -550,17 +633,20 @@ def prep_image(path, out_path):
     d.rectangle([0, 0, small.width, int(small.height * 0.12)], fill=70)
     mask = small.filter(ImageFilter.GaussianBlur(110 * SS / 4)).resize(img.size, Image.BILINEAR)
     Image.composite(Image.new("RGB", img.size, (0, 0, 0)), img, mask).save(out_path, quality=95)
+    return mode
 
 
-def zoom_filter(si, n):
-    """Same motion as v2: hook scene punches in fast, others alternate slow zoom in/out with a drift."""
+def zoom_filter(si, n, gentle=False):
+    """Hook scene punches in fast, others alternate slow zoom in/out with a drift.
+    gentle (a whole photo on a blurred backdrop): smaller zoom, so the photo's edges stay in view."""
     p = f"(on/{max(1, n - 1)})"
+    k = FIT_ZOOM if gentle else 1
     if si == 0:
-        z = f"(1+0.22*(1-(1-{p})*(1-{p})))"
+        z = f"(1+{0.22 * k:.3f}*(1-(1-{p})*(1-{p})))"
     elif si % 2 == 0:
-        z = f"(1+0.12*{p})"
+        z = f"(1+{0.12 * k:.3f}*{p})"
     else:
-        z = f"(1+0.12*(1-{p}))"
+        z = f"(1+{0.12 * k:.3f}*(1-{p}))"
     drift = 1 if si % 2 else -1
     return (f"zoompan=z='{1.15 / 1.1:.6f}*{z}'"
             f":x='(iw-iw/zoom)*(0.5+{0.25 * drift}*({p}-0.5))'"
@@ -589,9 +675,18 @@ def render_scene(si, photo, words, dur, work):
     track = build_overlay_track(si, words, dur, work)
     flash = ",fade=t=in:s=0:n=5:color=white" if si > 0 else ""  # white flash on each cut
     seg = work / f"seg{si}.mp4"
-    if Path(photo).suffix == ".mp4":  # stock video clip: fill the frame, loop if too short, darken the caption area
-        graph = (f"[0:v]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},fps={FPS},setsar=1{flash}[bg];"
-                 f"[1:v]format=rgba[vg];[bg][vg]overlay=0:0[bgv];"
+    if Path(photo).suffix == ".mp4":  # stock video clip: loop if too short, darken the caption area
+        cw, ch, _ = framing(photo)
+        if cw and kept_share(cw, ch) < FIT_BELOW:  # e.g. a 16:9 clip in a 9:16 reel: show it whole on a blurred copy
+            fw, fh = int(W * FIT_SIZE) // 2 * 2, int(H * FIT_SIZE) // 2 * 2
+            base = (f"[0:v]fps={FPS},split[a][b];"
+                    f"[a]scale={W // 8}:{H // 8}:force_original_aspect_ratio=increase,crop={W // 8}:{H // 8},"
+                    f"boxblur=6,eq=brightness=-0.3,scale={W}:{H},setsar=1[back];"
+                    f"[b]scale={fw}:{fh}:force_original_aspect_ratio=decrease:force_divisible_by=2,setsar=1[front];"
+                    f"[back][front]overlay=(W-w)/2:(H-h)*0.45{flash}[bg];")
+        else:  # close to the frame's shape: fill it
+            base = f"[0:v]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},fps={FPS},setsar=1{flash}[bg];"
+        graph = (base + f"[1:v]format=rgba[vg];[bg][vg]overlay=0:0[bgv];"
                  f"[2:v]format=rgba[ov];"
                  f"[bgv][ov]overlay=0:0:format=auto,scale=out_range=tv,format=yuv420p[v]")
         ff("-stream_loop", -1, "-i", photo, "-loop", 1, "-i", vignette_png(work), "-f", "concat", "-safe", 0, "-i", track,
@@ -600,8 +695,8 @@ def render_scene(si, photo, words, dur, work):
            "-color_range", "tv", "-colorspace", "bt470bg", seg)  # same colour tags as photo scenes, so joins are clean
     else:
         bg = work / f"s{si}_bg.jpg"
-        prep_image(photo, bg)
-        graph = (f"[0:v]{zoom_filter(si, n)}{flash}[bg];"
+        mode = prep_image(photo, bg)
+        graph = (f"[0:v]{zoom_filter(si, n, gentle=mode == 'fit')}{flash}[bg];"
                  f"[1:v]format=rgba[ov];"
                  f"[bg][ov]overlay=0:0:format=auto,scale=out_range=tv,format=yuv420p[v]")  # standard range for phones
         ff("-i", bg, "-f", "concat", "-safe", 0, "-i", track,
