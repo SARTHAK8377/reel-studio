@@ -8,7 +8,8 @@ back to the website so you can watch and download it.
 
 ## What it does
 
-- **Research:** recent news (Bing News), Wikipedia, and your own PDFs, links or pasted text.
+- **Research:** every reel starts from recent news (Bing News), plus Wikipedia and your own PDFs, links or
+  pasted text. Tick "Only use my sources" to skip the web search.
 - **Hooks:** the model writes 15 opening lines, ranks the best 3 and fact-checks the one it uses. Each
   reel shows its top 3 hooks with a **Remake with this hook** button.
 - **Script:** a short, clear story of 7 lines, checked for clarity and facts, with each line tagged with

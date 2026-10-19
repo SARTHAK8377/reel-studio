@@ -145,7 +145,9 @@ def research_job(job):
     jdir = JOBS / job["id"]
     update(job, stage="Researching", status="working")
     pdfs = sorted((jdir / "uploads").glob("*.pdf"))
-    sources, problems = research.gather(job["topic"], job["links"], pdfs, job["pasted"], web=job["news"],
+    # every reel searches recent news, unless you asked for only your own sources
+    sources, problems = research.gather(job["topic"], job["links"], pdfs, job["pasted"],
+                                        web=job["news"] and not job["only_sources"],
                                         log=lambda m: note(job, m), wiki=not job["only_sources"])
     for p in problems:
         note(job, "skipped: " + p)
@@ -342,7 +344,7 @@ def new_job(topic, pdfs):
     for k, data in enumerate(pdfs):
         (jdir / "uploads" / f"{k:02d}.pdf").write_bytes(data)
     links = [l.strip() for l in request.form.get("links", "").splitlines() if l.strip().startswith("http")]
-    job = {"id": jid, "topic": topic, "news": request.form.get("mode") == "news",
+    job = {"id": jid, "topic": topic, "news": True,  # always News mode: every reel is researched from recent articles
            "only_sources": request.form.get("only_sources") == "on", "links": links,
            "press_photos": request.form.get("press_photos") == "on",
            "hook_idea": request.form.get("hook_idea", "").strip()[:300],
@@ -397,7 +399,7 @@ def remake(jid):
     keep = ("topic", "news", "only_sources", "links", "press_photos", "hook_idea", "format", "voice", "music",
             "instructions", "pasted", "pdf_count")
     job = {k: parent[k] for k in keep if k in parent}
-    job.update(id=new_id, parent_id=jid, forced_hook=forced, hook_options=options if forced else None,
+    job.update(id=new_id, parent_id=jid, news=True, forced_hook=forced, hook_options=options if forced else None,
                created=time.time(), status="queued", stage="Waiting in line", log=[])
     save(job)
     work_queue.put(new_id)
