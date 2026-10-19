@@ -96,6 +96,7 @@ VISION_MODEL = os.environ.get("REEL_VISION_MODEL", "")  # e.g. gemma3:27b on Kag
 GOOD, OK_SCORE = 7, 5     # judge scores: stop searching at GOOD, accept the best if it reaches OK_SCORE
 PER_SEARCH = 3            # photos downloaded and judged per search
 MAX_JUDGED = 12           # per scene, so a hard topic can't take forever
+GIVE_UP = 5               # stock photos in a row judged the wrong subject: stop searching, reuse an earlier photo
 
 
 def search_openverse(query):
@@ -332,18 +333,25 @@ def fetch_photo(i, line, query, must_word, used):
     # research photos first (no title filter: they came from the topic's own pages), then the photo searches
     rounds = [("research photos", lambda: downloads(i, pool, used, None, limit=4, min_side=500))] if pool else []
     rounds += [(q, lambda q=q: candidates(i, q, musts, used)) for q in searches]
+    wrong = 0  # stock photos judged wrong subject / not real, in a row, for this scene
     for q, fetch in rounds:
+        if wrong >= GIVE_UP and not (best and best[0] >= OK_SCORE):
+            print(f"photo {i}: the last {wrong} stock photos were all the wrong subject, stopping the search", flush=True)
+            break
         for r, img in fetch():
             score, shows = judge(img, line)
             judged += 1
             if "[wrong subject]" in shows or "[not a real photo]" in shows:
                 REJECTED.add(r["key"])
+                wrong += q != "research photos"
+            else:
+                wrong = 0
             kind = "video" if r.get("video") else "photo"
             print(f"photo {i}: {score}/10 {kind} {r['title'][:60]!r}" + (f" (shows: {shows})" if shows else ""), flush=True)
             rank = score + (VIDEO_BONUS if r.get("video") else 0)
             if not best or rank > best[3]:
                 best = (score, r, img, rank)
-            if score >= GOOD or judged >= MAX_JUDGED:
+            if score >= GOOD or judged >= MAX_JUDGED or (wrong >= GIVE_UP and not (best and best[0] >= OK_SCORE)):
                 break
         if best and (best[0] >= GOOD or judged >= MAX_JUDGED):
             break
