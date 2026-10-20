@@ -298,6 +298,9 @@
   .kv div { padding: 12px; border-radius: 10px; background: var(--panel-2); box-shadow: inset 0 0 0 1px var(--line); }
   .kv span { display: block; font-size: 12px; color: var(--faint); }
   .kv b { font-weight: 600; font-family: "Geist Mono", monospace; font-size: 15px; }
+  .caption-box { padding: 16px; border-radius: 12px; background: var(--panel-2); box-shadow: inset 0 0 0 1px var(--line); }
+  .caption-text { margin: 0; font-size: 15px; line-height: 1.6; white-space: pre-wrap; }
+  .caption-tags { margin: 12px 0 0; color: var(--accent); font-weight: 500; word-spacing: 4px; }
   .err-box { color: var(--bad); padding: 12px 14px; border-radius: 10px; background: color-mix(in srgb, var(--bad) 10%, transparent);
              box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bad) 35%, transparent); font-size: 14px; }
 
@@ -838,6 +841,27 @@ function hooksHTML(j) {
       </div></div>`;
     }).join("")}</div>`;
 }
+function captionText(s) {
+  return [s.caption || "", (s.hashtags || []).join(" ")].filter(Boolean).join("\n\n");
+}
+function captionHTML(j) {
+  const s = j.script || {};
+  if (!s.caption) return `<div class="note"><i class="ph ph-info"></i><div>This reel was made before captions existed. Remake it to get a ready-to-paste Instagram caption with hashtags.</div></div>`;
+  return `<div class="note"><i class="ph ph-instagram-logo"></i><div>A ready-to-paste Instagram caption, written from this reel's facts. Check it before posting.</div></div>
+    <div class="caption-box">
+      <p class="caption-text">${esc(s.caption)}</p>
+      ${(s.hashtags || []).length ? `<p class="caption-tags">${s.hashtags.map(esc).join(" ")}</p>` : ""}
+    </div>
+    <div class="row-btns" style="margin-top:14px"><button class="btn" data-copy-caption><span>Copy caption</span><span class="nub"><i class="ph-bold ph-copy"></i></span></button></div>`;
+}
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); return true; } catch (e) {}
+  const t = document.createElement("textarea"); t.value = text; t.style.position = "fixed"; t.style.opacity = "0";
+  document.body.append(t); t.select();
+  let ok = false; try { ok = document.execCommand("copy"); } catch (e) {}
+  t.remove(); return ok;
+}
+
 function sourcesHTML(j) {
   const src = j.script?.sources || [];
   if (!src.length) return `<div class="note"><i class="ph ph-info"></i><div>No sources were used for this reel.</div></div>`;
@@ -895,12 +919,13 @@ function renderDrawer() {
         : `<div class="player wait"><div><i class="ph ph-warning-circle" style="font-size:28px;color:var(--bad)"></i><div>This reel failed.</div></div></div>`)
       : `<div class="player wait thumb pending" style="border-radius:14px"><div class="stage"><i class="ph ${stageIcon(j)}"></i>${esc(stageText(j))}<div class="bar"><i style="width:${progress(j)}%"></i></div></div></div>`;
   const opts = j.script?.hook_options?.length || 0;
-  const tabs = [["script", "ph-text-align-left", "Script"], ["hooks", "ph-lightbulb", "Hooks", opts], ["sources", "ph-books", "Sources", j.script?.sources?.length], ["details", "ph-list-magnifying-glass", "Details"]];
+  const tabs = [["script", "ph-text-align-left", "Script"], ["hooks", "ph-lightbulb", "Hooks", opts], ["caption", "ph-instagram-logo", "Caption"], ["sources", "ph-books", "Sources", j.script?.sources?.length], ["details", "ph-list-magnifying-glass", "Details"]];
   let pane;
   if (!done && tab !== "details") {
     pane = j.status === "stopped" ? stoppedHTML(j) : j.status === "error" ? `<div class="err-box">${esc(j.error || "Unknown error")}</div><p class="hint">Open Details for the full log. Remake tries again with the same settings.</p>`
       : `<div class="note"><i class="ph ph-hourglass-medium"></i><div>${j.forced_hook ? `Remaking with the hook: <b>${esc(j.forced_hook.spoken)}</b><br>` : ""}The script, hooks and sources appear here when the reel is ready. Kaggle runs usually take 8 to 12 minutes.</div></div>`;
-  } else pane = tab === "script" ? linesHTML(j.script) : tab === "hooks" ? hooksHTML(j) : tab === "sources" ? sourcesHTML(j) : detailsHTML(j);
+  } else pane = tab === "script" ? linesHTML(j.script) : tab === "hooks" ? hooksHTML(j) : tab === "caption" ? captionHTML(j)
+    : tab === "sources" ? sourcesHTML(j) : detailsHTML(j);
   const parent = j.parent_id && JOBS.find(x => x.id === j.parent_id);
   $("#dpanel").innerHTML = `
     <div class="dhead"><button class="icon-btn" data-close aria-label="Close"><i class="ph ph-x"></i></button>
@@ -934,6 +959,10 @@ $("#dpanel").addEventListener("click", async e => {
   if (e.target.closest("[data-close]")) return closeDrawer();
   const t = e.target.closest("[data-tab]");
   if (t) { tab = t.dataset.tab; lastDrawer = ""; return renderDrawer(); }
+  if (e.target.closest("[data-copy-caption]")) {
+    const j = JOBS.find(x => x.id === openId);
+    return toast(j && await copyText(captionText(j.script || {})) ? "Caption copied. Paste it into Instagram" : "Could not copy. Select the text and copy it", !j);
+  }
   const r = e.target.closest("[data-remake]");
   if (r) {
     r.disabled = true;
