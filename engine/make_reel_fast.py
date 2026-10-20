@@ -9,7 +9,7 @@ What changed vs v2:
 Usage:  python make_reel_fast.py OUT_DIR            (whole reel)
         python make_reel_fast.py OUT_DIR --scene 0  (one scene only, for quick tests)
 """
-import argparse, asyncio, base64, io, itertools, json, os, re, subprocess, time, urllib.parse, urllib.request, wave
+import argparse, asyncio, base64, io, itertools, json, os, queue, re, subprocess, threading, time, urllib.parse, urllib.request, wave
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 from pathlib import Path
@@ -62,11 +62,11 @@ def ff(*args):
 
 # ---------- assets: photos + voice ----------
 
-def get_json(url, tries=3):
-    """GET a JSON API, retrying slow or flaky responses (the free photo API sometimes stalls)."""
+def get_json(url, tries=2):
+    """GET a JSON API, retrying once if it is slow or flaky (the free photo APIs sometimes stall)."""
     for attempt in range(1, tries + 1):
         try:
-            return json.loads(urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=30).read())
+            return json.loads(urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=15).read())
         except Exception as e:
             if attempt == tries:
                 raise
@@ -96,6 +96,7 @@ VISION_MODEL = os.environ.get("REEL_VISION_MODEL", "")  # e.g. gemma3:27b on Kag
 GOOD, OK_SCORE = 7, 5     # judge scores: stop searching at GOOD, accept the best if it reaches OK_SCORE
 PER_SEARCH = 3            # photos downloaded and judged per search
 MAX_JUDGED = 12           # per scene, so a hard topic can't take forever
+POOL_MAX = 20              # story photos looked at, at most (each is checked once, against every line)
 GIVE_UP = 5               # stock photos in a row judged the wrong subject: stop searching, reuse an earlier photo
 
 
@@ -106,6 +107,44 @@ def search_openverse(query):
         tags = " ".join(t["name"] for t in r.get("tags") or [])
         yield {"url": polite_url(r["url"]), "key": r["url"], "title": r.get("title") or "", "text": f"{r.get('title')} {tags}",
                "credit": r.get("attribution") or r.get("title") or r["url"]}
+
+
+def name_photos(names, per_name=3):
+    """Photos of the real people, places and organisations named in the script, from their Wikipedia articles
+    (all hosted on Wikimedia Commons, so freely licensed). The article's lead image (often a portrait) comes first."""
+    found = []
+    for name in names:
+        try:
+            q = urllib.parse.urlencode({"action": "query", "list": "search", "srsearch": name, "format": "json", "srlimit": 1})
+            hits = get_json("https://en.wikipedia.org/w/api.php?" + q)["query"]["search"]
+            if not hits:
+                continue
+            title = hits[0]["title"]
+            q = urllib.parse.urlencode({"action": "query", "format": "json", "titles": title, "redirects": 1,
+                                        "prop": "pageimages", "piprop": "name"})
+            lead = next(iter(get_json("https://en.wikipedia.org/w/api.php?" + q)["query"]["pages"].values())).get("pageimage", "")
+            q = urllib.parse.urlencode({"action": "query", "format": "json", "titles": title, "redirects": 1,
+                                        "generator": "images", "gimlimit": 30, "prop": "imageinfo",
+                                        "iiprop": "url|size|extmetadata", "iiurlwidth": 1280})
+            pages = get_json("https://en.wikipedia.org/w/api.php?" + q).get("query", {}).get("pages", {}).values()
+            mine = []
+            for p in pages:
+                info, file = (p.get("imageinfo") or [{}])[0], p.get("title", "")
+                if (not re.search(r"\.(jpe?g|png|webp)$", file, re.I) or min(info.get("width", 0), info.get("height", 0)) < 500
+                        or re.search(r"logo|icon|flag|map|signature|symbol|seal|coat of arms|locator", file, re.I)):
+                    continue
+                meta = info.get("extmetadata") or {}
+                artist = re.sub("<[^>]+>", "", (meta.get("Artist") or {}).get("value", "unknown")).strip()
+                lic = (meta.get("LicenseShortName") or {}).get("value", "free license")
+                clean = file.removeprefix("File:").rsplit(".", 1)[0]
+                mine.append({"url": info.get("thumburl") or info.get("url"), "title": f"{title}: {clean}", "kind": "wikipedia",
+                             "credit": f'"{clean}" by {artist}, {lic}, via Wikimedia Commons (from Wikipedia: {title})',
+                             "lead": file.removeprefix("File:").replace(" ", "_") == lead})
+            mine.sort(key=lambda m: not m["lead"])
+            found += mine[:per_name]
+        except Exception as e:
+            print(f"photos of {name!r}: Wikipedia lookup failed ({e})", flush=True)
+    return found
 
 
 def search_commons(query):
@@ -219,10 +258,6 @@ def judge(img, line):
     """Ask the vision LLM how well a photo fits the narration (0-10). No model -> everything passes."""
     if not VISION_MODEL:
         return 10, ""
-    small = img.copy()
-    small.thumbnail((768, 768))
-    buf = io.BytesIO()
-    small.save(buf, "JPEG", quality=85)
     prompt = f"""This image may be shown in a short educational video while the narrator says:
 "{line}"
 Video topic: {TOPIC}
@@ -232,7 +267,9 @@ Look carefully and answer three things:
    screenshots and text-heavy images.
 2. "right_subject": true only if it shows the actual subject of the video. false if it is a different
    kind of thing that only looks or sounds similar (a squid for an octopus, a train car or race car for a
-   new sports car, a different species, model or person).
+   new sports car, a different species, model or person). For news, also false if it clearly shows a different
+   real event, place or person than this story (for example a crime scene or protest from another city or
+   country, or a different politician).
 3. "score" 0-10 for how well it fits what the narrator says at that moment
    (10 = exactly what is being talked about, 6 = clearly the right thing, 3 = loosely related, 0 = unrelated).
 4. "subject_x" and "subject_y": where the centre of the main subject is (a person's face, the car, the animal),
@@ -240,38 +277,98 @@ Look carefully and answer three things:
 Be strict: a wrong pick looks unprofessional.
 Return JSON: {{"real_photo": true/false, "right_subject": true/false, "score": <0-10>, "shows": "<a few words>",
 "subject_x": <0-100>, "subject_y": <0-100>}}"""
-    body = json.dumps({"model": VISION_MODEL, "prompt": prompt, "images": [base64.b64encode(buf.getvalue()).decode()],
-                       "format": "json", "stream": False,
-                       "options": {"temperature": 0, "num_ctx": 12288}}).encode()  # same as the writer: no model reload
     try:
-        req = urllib.request.Request("http://localhost:11434/api/generate", body, {"Content-Type": "application/json"})
-        data = json.loads(json.loads(urllib.request.urlopen(req, timeout=180).read())["response"])
-        score = max(0, min(10, int(float(str(data.get("score", 0)).split("/")[0]))))
-        shows = str(data.get("shows", ""))[:60]
-        try:  # where the subject is, so a crop keeps it (kept on the image object, saved next to the photo)
-            img.info["focus"] = [max(0.0, min(1.0, float(data[k]) / 100)) for k in ("subject_x", "subject_y")]
-        except (KeyError, TypeError, ValueError):
-            pass
-        yes = lambda v: str(v).strip().lower() in ("true", "yes", "1")
-        if not yes(data.get("right_subject", True)):
-            score, shows = min(score, 2), shows + " [wrong subject]"
-        elif not yes(data.get("real_photo", True)):
-            score, shows = min(score, 4), shows + " [not a real photo]"
-        return score, shows
+        data = look(img, prompt)
+        scores, shows = verdict(img, data, [data.get("score", 0)])
+        return scores[0], shows
     except Exception as e:
         print(f"  photo judge failed ({e}); accepting the photo", flush=True)
         return OK_SCORE, ""
 
 
+def look(img, prompt):
+    """One vision-model call about one photo; returns the parsed JSON."""
+    small = img.copy()
+    small.thumbnail((768, 768))
+    buf = io.BytesIO()
+    small.save(buf, "JPEG", quality=85)
+    body = json.dumps({"model": VISION_MODEL, "prompt": prompt, "images": [base64.b64encode(buf.getvalue()).decode()],
+                       "format": "json", "stream": False,
+                       "options": {"temperature": 0, "num_ctx": 12288}}).encode()  # same as the writer: no model reload
+    req = urllib.request.Request("http://localhost:11434/api/generate", body, {"Content-Type": "application/json"})
+    return json.loads(json.loads(urllib.request.urlopen(req, timeout=180).read())["response"])
+
+
+def verdict(img, data, raw_scores):
+    """Apply the strict caps to the model's scores; also keeps the subject's position on the image object."""
+    to_int = lambda v: max(0, min(10, int(float(str(v).split("/")[0]))))
+    scores = [to_int(s) for s in raw_scores]
+    shows = str(data.get("shows", ""))[:60]
+    try:  # where the subject is, so a crop keeps it (kept on the image object, saved next to the photo)
+        img.info["focus"] = [max(0.0, min(1.0, float(data[k]) / 100)) for k in ("subject_x", "subject_y")]
+    except (KeyError, TypeError, ValueError):
+        pass
+    yes = lambda v: str(v).strip().lower() in ("true", "yes", "1")
+    if not yes(data.get("right_subject", True)):
+        scores, shows = [min(s, 2) for s in scores], shows + " [wrong subject]"
+    elif not yes(data.get("real_photo", True)):
+        scores, shows = [min(s, 4) for s in scores], shows + " [not a real photo]"
+    return scores, shows
+
+
+POOL_SCORES = {}  # research photo url -> (score for every scene line, shows): each one is looked at only once
+
+
+def judge_pool(img, url, i, line):
+    """Research photos (news articles, Wikipedia) are tried for every scene. Instead of asking the model again for
+    each scene, it rates the photo against all the lines in one look, and those scores are reused for every scene.
+    Same questions and the same strict caps as judge(); falls back to judge() if the reply doesn't fit."""
+    if not VISION_MODEL:
+        return 10, ""
+    if url not in POOL_SCORES:
+        lines = "\n".join(f"{k + 1}. {s[0]}" for k, s in enumerate(SCENES))
+        prompt = f"""This image may be shown in a short educational video. The narrator says these lines, one per scene:
+{lines}
+Video topic: {TOPIC}
+Look carefully and answer:
+1. "real_photo": true only if it is a real photograph or video frame. false for drawings, paintings,
+   illustrations, diagrams, scientific plates, sculptures, vases or other artworks, 3D renders, logos, maps,
+   screenshots and text-heavy images.
+2. "right_subject": true only if it shows the actual subject of the video. false if it is a different
+   kind of thing that only looks or sounds similar (a squid for an octopus, a train car or race car for a
+   new sports car, a different species, model or person). For news, also false if it clearly shows a different
+   real event, place or person than this story (for example a crime scene or protest from another city or
+   country, or a different politician).
+3. "scores": for EACH line above, in order, 0-10 for how well the image fits what the narrator says in that line
+   (10 = exactly what is being talked about, 6 = clearly the right thing, 3 = loosely related, 0 = unrelated).
+   Exactly {len(SCENES)} numbers.
+4. "subject_x" and "subject_y": where the centre of the main subject is (a person's face, the car, the animal),
+   in percent from the left edge and from the top edge (50, 50 = the middle). Used to crop around it.
+Be strict: a wrong pick looks unprofessional.
+Return JSON: {{"real_photo": true/false, "right_subject": true/false, "scores": [<0-10>, ...],
+"shows": "<a few words>", "subject_x": <0-100>, "subject_y": <0-100>}}"""
+        try:
+            data = look(img, prompt)
+            raw = data.get("scores")
+            POOL_SCORES[url] = verdict(img, data, raw) if isinstance(raw, list) and len(raw) == len(SCENES) else None
+        except Exception as e:
+            print(f"  photo judge failed ({e}); asking per scene instead", flush=True)
+            POOL_SCORES[url] = None
+    if POOL_SCORES[url] is None:  # the model didn't give one score per line: ask about this scene the usual way
+        return judge(img, line)
+    scores, shows = POOL_SCORES[url]
+    return scores[i], shows
+
+
 def candidates(i, query, musts, used):
     """Downloaded photos for one search (both sources, alternating), passing the cheap title filters."""
     lists = []
-    for name, search in (("flickr", search_flickr), ("commons", search_commons), ("openverse", search_openverse),
-                         ("nasa", search_nasa)):
-        try:
-            lists.append(list(search(query)))
-        except Exception as e:  # one source failing must not stop the reel
-            print(f"photo {i}: {name} search for {query!r} failed ({e})", flush=True)
+    sources = [(n, f) for n, f in (("flickr", search_flickr), ("commons", search_commons),
+                                    ("openverse", search_openverse), ("nasa", search_nasa)) if n not in DOWN_SOURCES]
+    with ThreadPoolExecutor(len(sources) or 1) as pool:  # all sources at once, results kept in the usual order
+        for name, found in zip([n for n, _ in sources], pool.map(lambda nf: search_source(i, query, *nf), sources)):
+            if found is not None:
+                lists.append(found)
     clips = []
     for name, search in (("pexels", search_pexels_video), ("pixabay", search_pixabay_video)):
         try:
@@ -284,9 +381,71 @@ def candidates(i, query, musts, used):
     yield from downloads(i, (r for pair in itertools.zip_longest(*lists) for r in pair if r), used, musts)
 
 
+DOWN_SOURCES, SOURCE_FAILS = set(), {}  # a photo source that failed twice in a row is skipped for the rest of the reel
+
+
+def search_source(i, query, name, search):
+    """One photo source's results, or None if it failed. Two failures in a row: the source is down, stop asking it."""
+    try:
+        found = list(search(query))
+        SOURCE_FAILS[name] = 0
+        return found
+    except Exception as e:  # one source failing must not stop the reel
+        SOURCE_FAILS[name] = SOURCE_FAILS.get(name, 0) + 1
+        print(f"photo {i}: {name} search for {query!r} failed ({e})", flush=True)
+        if SOURCE_FAILS[name] >= 2:
+            DOWN_SOURCES.add(name)
+            print(f"photo {i}: {name} seems to be down, skipping it for the rest of this reel", flush=True)
+        return None
+
+
 PHOTO_POOL = []  # photos found during research (Wikipedia article images, opt-in press photos); tried first
 IMG_CACHE = {}   # url -> downloaded image, so research photos aren't fetched again for every scene
 REJECTED = set() # judged "not a real photo" or "wrong subject": true for every scene, so never judged again
+
+
+LAST_HIT, HIT_LOCK = {}, threading.Lock()
+
+
+def polite_wait(url):
+    """At most one download per second from the same website (different websites don't wait for each other)."""
+    host = urllib.parse.urlparse(url).netloc
+    with HIT_LOCK:
+        wait = LAST_HIT.get(host, 0) + 1 - time.monotonic()
+        LAST_HIT[host] = time.monotonic() + max(0, wait)
+    if wait > 0:
+        time.sleep(wait)
+
+
+def prefetched(items, ahead=2):
+    """Run a photo search/download generator in the background, a couple of photos ahead, so the next photo is
+    already downloaded while the model is still looking at the current one. Same photos, same order."""
+    q, stop, done = queue.Queue(maxsize=ahead), threading.Event(), object()
+
+    def put(x):
+        while not stop.is_set():
+            try:
+                q.put(x, timeout=0.5)
+                return True
+            except queue.Full:
+                pass
+        return False
+
+    def run():
+        try:
+            for x in items:
+                if not put(x):
+                    return
+        except Exception as e:  # shouldn't happen (sources catch their own errors), but never hang the caller
+            print(f"  photo search stopped early ({e})", flush=True)
+        put(done)
+
+    threading.Thread(target=run, daemon=True).start()
+    try:
+        while (x := q.get()) is not done:
+            yield x
+    finally:
+        stop.set()
 
 
 def downloads(i, results, used, musts=None, limit=PER_SEARCH, min_side=700):
@@ -302,7 +461,7 @@ def downloads(i, results, used, musts=None, limit=PER_SEARCH, min_side=700):
             if img is None and r.get("video"):
                 img = IMG_CACHE[r["url"]] = video_frame(r)
             elif img is None:
-                time.sleep(1)  # be polite to image hosts
+                polite_wait(r["url"])
                 data = urllib.request.urlopen(urllib.request.Request(r["url"], headers=UA), timeout=60).read()
                 img = IMG_CACHE[r["url"]] = Image.open(io.BytesIO(data)).convert("RGB")
         except Exception as e:
@@ -331,15 +490,20 @@ def fetch_photo(i, line, query, must_word, used):
     best, judged = None, 0
     pool = [{"key": p["url"], "text": p.get("title", ""), **p} for p in PHOTO_POOL]
     # research photos first (no title filter: they came from the topic's own pages), then the photo searches
-    rounds = [("research photos", lambda: downloads(i, pool, used, None, limit=4, min_side=500))] if pool else []
+    rounds = [("research photos", lambda: downloads(i, pool, used, None, limit=6, min_side=500))] if pool else []
     rounds += [(q, lambda q=q: candidates(i, q, musts, used)) for q in searches]
     wrong = 0  # stock photos judged wrong subject / not real, in a row, for this scene
     for q, fetch in rounds:
         if wrong >= GIVE_UP and not (best and best[0] >= OK_SCORE):
             print(f"photo {i}: the last {wrong} stock photos were all the wrong subject, stopping the search", flush=True)
             break
-        for r, img in fetch():
-            score, shows = judge(img, line)
+        for r, img in prefetched(fetch()):
+            if r["key"] in REJECTED:  # rejected while this one was already downloading in the background
+                continue
+            if q == "research photos":
+                score, shows = judge_pool(img, r["url"], i, line)
+            else:
+                score, shows = judge(img, line)
             judged += 1
             if "[wrong subject]" in shows or "[not a real photo]" in shows:
                 REJECTED.add(r["key"])
@@ -400,15 +564,23 @@ async def speak(i, text):
         cached = json.loads(meta.read_text(encoding="utf-8"))
         if cached["text"] == text and cached["voice"] == VOICE:
             return wav, [tuple(w) for w in cached["words"]]
-    words = []
-    comm = edge_tts.Communicate(text, VOICE, rate="+10%", boundary="WordBoundary")
-    with open(mp3, "wb") as f:
-        async for chunk in comm.stream():
-            if chunk["type"] == "audio":
-                f.write(chunk["data"])
-            elif chunk["type"] == "WordBoundary":
-                s = chunk["offset"] / 1e7
-                words.append((s, s + chunk["duration"] / 1e7, chunk["text"]))
+    for attempt in range(1, 5):  # the voice service sometimes returns nothing: retry this line, not the whole reel
+        words = []
+        try:
+            comm = edge_tts.Communicate(text, VOICE, rate="+10%", boundary="WordBoundary")
+            with open(mp3, "wb") as f:
+                async for chunk in comm.stream():
+                    if chunk["type"] == "audio":
+                        f.write(chunk["data"])
+                    elif chunk["type"] == "WordBoundary":
+                        s = chunk["offset"] / 1e7
+                        words.append((s, s + chunk["duration"] / 1e7, chunk["text"]))
+            break
+        except Exception as e:
+            if attempt == 4:
+                raise
+            print(f"voice {i}: attempt {attempt} failed ({type(e).__name__}), retrying", flush=True)
+            await asyncio.sleep(2 * attempt)
     ff("-i", mp3, "-ar", 24000, "-ac", 1, wav)
     meta.write_text(json.dumps({"text": text, "voice": VOICE, "words": words}), encoding="utf-8")
     return wav, words
@@ -735,6 +907,12 @@ def main():
         HOOK_TEXT, SCENES = data["hook"], [tuple(s[:3]) for s in data["scenes"]]
         TOPIC = data.get("topic", "")
         PHOTO_POOL = [p for p in data.get("photo_pool", []) if p.get("url")]
+        if data.get("photo_names"):  # photos of the people and places in the story: after the article photos
+            named = [p for p in name_photos(data["photo_names"]) if p["url"] not in {q["url"] for q in PHOTO_POOL}]
+            first_wiki = next((k for k, p in enumerate(PHOTO_POOL) if p.get("kind") == "wikipedia"), len(PHOTO_POOL))
+            PHOTO_POOL[first_wiki:first_wiki] = named
+            print(f"photos of {', '.join(data['photo_names'])}: {len(named)}", flush=True)
+        PHOTO_POOL = PHOTO_POOL[:POOL_MAX]
     W, H = FORMATS[args.format or data.get("format") or "9:16"]
     VOICE = args.voice or data.get("voice") or VOICE
     music_mood = (args.music or data.get("music") or "off").lower()

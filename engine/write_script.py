@@ -8,7 +8,7 @@ With --sources, every fact must come from the given source text, and each line i
 Usage:  python write_script.py "TOPIC" OUT.json [--sources sources.json] [--only-sources] [--news]
                                [--subject "octopus|polpo"] [--model gemma3:27b]
 """
-import argparse, json, re, time, urllib.request
+import argparse, json, re, time, urllib.parse, urllib.request
 from pathlib import Path
 
 HERE = Path(__file__).parent
@@ -28,13 +28,30 @@ Rules:
 - No slang ("vibe", "fancy", "lowkey", "slay", "no cap", "drama queen", "literally"), no emojis, no hashtags.
 - Only use a comparison if it is instantly clear, and say what it compares.
 - Talk to the viewer as "you". The fun comes from the surprising facts, not from jokes. At most one light joke.
-- Every fact must be true. No made-up numbers."""
+- Every fact must be true. No made-up numbers.
+- Never say where the information comes from: no news outlets, websites, reporters or links (not "the BBC
+  reports", "according to Reuters", "bbc.com", "read more at..."). Quoting the people involved is fine."""
 
 NEWS_RULES = """This is a NEWS reel. Extra rules:
 - Report what happened, who said what, and when. Stay neutral: do not take sides or give opinions.
-- If sources disagree, say so. Attribute claims ("the company says...", "police said...").
+- If sources disagree, say so. Attribute claims to the people involved ("the company says...", "police said..."),
+  never to the news outlet that reported them.
 - If a source says "reportedly", "plans to", "could" or "may", keep that word: never turn a report into a fact.
 - Use exact numbers and names only as they appear in the sources."""
+PHOTO_NEWS = """Photos: this is news, so the photos must show the REAL people, places and events of this story,
+never generic stock scenes.
+- "photo_subject": the main person, place or event of the story, as its name is written (for example
+  "Helen Haines", "Tiger Shroff", "Marseille", "Sudan"). Never a generic word like "city", "car" or "street".
+- For each line, "photo": 2-5 words to search for a photo of what that line is about, using the real names of the
+  people, places or events in it (for example "Helen Haines Parliament", "Wangaratta police", "Juhu Mumbai").
+  No logos, no text, no diagrams.
+- "names": up to 5 real people, places or organisations central to the story, written as their Wikipedia article
+  would be titled (for example ["Helen Haines", "Wangaratta", "Parliament of Australia"])."""
+PHOTO_GENERAL = """Choose "photo_subject": ONE simple, common English noun for the photos (for example "octopus", "robot",
+"computer", "city", "protest", "rocket").
+For each line give "photo": 2-4 plain words describing a real photo a free photo library would have
+(always include the photo_subject word; no logos, no text, no diagrams).
+"names": up to 5 real people, places or organisations in the script, as Wikipedia titles them ([] if none)."""
 CTA = re.compile(r"\b(follow|comment|save|share|subscribe|send this|tag)\b", re.I)
 
 
@@ -122,11 +139,35 @@ def scene_parts(s, subject):
     return [line, str(photo).strip() or subject, str(src).strip().upper().strip("[]")]
 
 
-def problems(lines):
+WEBSITE = re.compile(r"https?://|www\.|\b[\w-]+\.(com|org|net|co\.uk|co\.in|in|news|tv|io)\b|\bwebsite\b", re.I)
+
+
+def outlet_names(sources, topic=""):
+    """Names of the news sites the facts came from (e.g. "BBC", "BBC News", "Reuters"), which the script must not say.
+    A name that is part of the topic itself (a reel about the BBC) is allowed."""
+    names = set()
+    for src in sources:
+        host = urllib.parse.urlparse(src.get("url") or "").netloc.lower().removeprefix("www.")
+        if host:
+            names.add(host.split(".")[0])
+        if src.get("site"):
+            names.add(src["site"].strip())
+            names.add(src["site"].split()[0])
+    topic_words = set(re.findall(r"[a-z0-9]+", topic.lower()))
+    return [n for n in names if len(n) >= 3 and not set(re.findall(r"[a-z0-9]+", n.lower())) & topic_words]
+
+
+def names_outlet(line, outlets):
+    return bool(WEBSITE.search(line)) or any(re.search(rf"\b{re.escape(n)}\b", line, re.I) for n in outlets)
+
+
+def problems(lines, outlets=()):
     """Lines that break the clarity rules in ways code can check."""
     out = []
     seen = set()
     for k, l in enumerate(lines):
+        if names_outlet(l, outlets):
+            out.append(f"line {k + 1} says where the news came from (an outlet or website); give the fact without it")
         words = len(re.findall(r"\w+", l))
         if SLANG.search(l):
             out.append(f"line {k + 1} uses slang")
@@ -207,9 +248,54 @@ Return JSON: {{"screen": "..."}}""", 0.4)
     return wrap_screen(spoken)
 
 
+MAX_HASHTAGS = 5  # Instagram now limits how many hashtags a post may use; a few precise ones work best anyway
+
+
+def make_caption(model, topic, lines, news, outlets=(), log=print):
+    """A ready-to-paste Instagram caption (2-3 short sentences) and a few hashtags, from the finished script.
+    Same rules as the script: true, clear, neutral for news, no slang or emojis, no news outlet or website names.
+    Never fails the reel: on any problem it returns ("", [])."""
+    script = "\n".join(f"- {l}" for l in lines)
+    for _ in range(2):
+        try:
+            data = ask(model, f"""Write the Instagram caption for this reel.
+Topic: {topic}
+The reel says:
+{script}
+
+Rules:
+- "caption": 2-3 short, clear sentences. The first sentence makes people want to watch (a surprising fact or
+  question from the reel, not clickbait). Then say what the reel covers. {"Neutral and factual: this is news." if news else ""}
+- Only facts that are in the reel. No slang, no emojis, no hashtags inside the caption, no links or websites,
+  and never name a news outlet or reporter.
+- "hashtags": {MAX_HASHTAGS} hashtags people would really search for, most important first: the main person, place
+  or event, then the wider subject (for example "#TigerShroff", "#Mumbai", "#Bollywood", "#IndiaNews"). No spaces,
+  no generic ones like "#viral", "#fyp" or "#reels".
+Return JSON: {{"caption": "...", "hashtags": ["#...", "#..."]}}""", 0.5)
+            caption = clean(field(data, ("caption", "description", "text")))
+            if names_outlet(caption, outlets):  # same rule as the script: drop any sentence naming the source
+                caption = " ".join(x for x in re.split(r"(?<=[.!?])\s+", caption) if not names_outlet(x, outlets))
+            raw = data.get("hashtags") if isinstance(data, dict) else None
+            if isinstance(raw, str):
+                raw = raw.replace(",", " ").split()
+            tags = []
+            for t in raw if isinstance(raw, list) else []:
+                t = "#" + re.sub(r"[^\w]", "", str(t))
+                if len(t) > 2 and t.lower() not in [x.lower() for x in tags] and t.lower() not in ("#viral", "#fyp", "#reels") \
+                        and not any(re.sub(r"\W", "", o.lower()) in t.lower() for o in outlets):
+                    tags.append(t)
+            if caption:
+                log(f"  caption: {caption}\n  hashtags: {' '.join(tags[:MAX_HASHTAGS])}")
+                return caption, tags[:MAX_HASHTAGS]
+        except Exception as e:
+            log(f"  caption attempt failed ({e})")
+    return "", []
+
+
 def write(topic, out_path, sources=(), only_sources=False, news=False, subject_words="", model=MODEL, log=print,
           instructions="", hook_idea="", forced_hook=None, forced_options=None):
     t0 = time.perf_counter()
+    outlets = outlet_names(sources, topic)  # news sites the facts came from: the script must not name them
     src_text = "\n\n".join(f"[{s['id']}] {s['title']}\n{s['text']}" for s in sources)
     src_block = f"\n{source_rules(only_sources)}\n\nSOURCE MATERIAL:\n{src_text}\n" if sources else ""
     rules = VOICE + ("\n\n" + NEWS_RULES if news else "")
@@ -318,26 +404,27 @@ Line 1 must be exactly: {hook['spoken']}
 
 7 lines in total, 70-110 spoken words. Follow the story order from the rules.
 Line 7 must be a short call to action (follow, comment, save or share) and nothing else.
-Choose "photo_subject": ONE simple, common English noun for the photos (for example "octopus", "robot",
-"computer", "city", "protest", "rocket"){f' - use "{subject_words.split("|")[0]}"' if subject_words else ""}.
-For each line give "photo": 2-4 plain words describing a real photo a free photo library would have
-(always include the photo_subject word; no logos, no text, no diagrams)
-{', and "source": the source id (like "S1") the fact comes from, or "" for the hook and call to action' if sources else ""}.
-Return JSON: {{"photo_subject": "...", "scenes": [{{"line": "...", "photo": "..."{', "source": "S1"' if sources else ""}}}]}}""", 0.7)
+{PHOTO_NEWS if news else PHOTO_GENERAL}{f' Use "{subject_words.split("|")[0]}" as the photo_subject.' if subject_words else ""}
+{'For each line also give "source": the source id (like "S1") the fact comes from, or "" for the hook and call to action.' if sources else ""}
+Return JSON: {{"photo_subject": "...", "names": ["..."], "scenes": [{{"line": "...", "photo": "..."{', "source": "S1"' if sources else ""}}}]}}""", 0.7)
         subject = (subject_words.split("|")[0] if subject_words else field(data, ("photo_subject", "subject")) or "nature")
-        subject = re.sub(r"[^a-z ]", "", subject.lower()).strip() or "nature"
+        subject = re.sub(r"[^a-z0-9 ]", "", subject.lower()).strip() or "nature"
         scenes = [scene_parts(s, subject) for s in first_list(data, "scenes")]
         if not 5 <= len(scenes) <= 9:
             raise ValueError(f"{len(scenes)} scenes")
         scenes[0][0] = hook["spoken"]  # hook stays locked
-        return subject, scenes
-    subject, scenes = step("3 write", write_story)
+        raw = data.get("names") if isinstance(data, dict) else None
+        names = [clean(n) for n in raw if isinstance(n, str) and 2 < len(clean(n)) < 60][:5] if isinstance(raw, list) else []
+        return subject, scenes, names
+    subject, scenes, photo_names = step("3 write", write_story)
+    if photo_names:
+        log(f"  people and places to find photos of: {', '.join(photo_names)}")
 
     # 4. 12-year-old check: rewrite only unclear lines, same number of lines, hook locked
     for round_ in (1, 2):
         def check():
             draft = "\n".join(f"{k + 1}. {line}" for k, (line, _, _) in enumerate(scenes))
-            issues = problems([s[0] for s in scenes])
+            issues = problems([s[0] for s in scenes], outlets)
             data = ask(model, f"""{rules}
 {src_block}
 Read this reel script as a 12-year-old hearing it once, with no pictures.
@@ -362,7 +449,8 @@ Return JSON: {{"lines": ["...", "..."]}}""", 0.3)
             break
         lines[0] = hook["spoken"]
         scenes = [[line, photo, src] for line, (_, photo, src) in zip(lines, scenes)]
-        left = problems(lines)
+        # a missing call to action is added in code after the fact check, so it never costs a second round
+        left = [p for p in problems(lines, outlets) if "call to action" not in p]
         if not left:
             break
         log(f"  still to fix: {left}")
@@ -406,6 +494,20 @@ Return {{"fixes": []}} if every line is correct.""", 0.1)
     except SystemExit:
         log("  fact check failed, keeping the script as it is")
 
+    for k in range(len(scenes) - 1, 0, -1):  # last safety net: drop any sentence that names an outlet or website
+        line = scenes[k][0]
+        if names_outlet(line, outlets):
+            kept = " ".join(x for x in re.split(r"(?<=[.!?])\s+", line) if not names_outlet(x, outlets)).strip()
+            log(f"  removed a mention of the news source from line {k + 1}: {line}")
+            if kept:
+                scenes[k][0] = kept
+            elif len(scenes) > 5:
+                del scenes[k]
+    if len(scenes) > 1 and not CTA.search(scenes[-1][0]):  # the model left out the call to action: add one
+        cta = "Follow for more updates." if news else "Follow for more."
+        scenes[-1][0] = scenes[-1][0].rstrip() + ("" if scenes[-1][0].rstrip().endswith((".", "!", "?")) else ".") + " " + cta
+        log(f"  added the call to action to the last line: {scenes[-1][0]}")
+
     if scenes[0][0] != hook["spoken"]:  # the fact check corrected the hook: the headline must match the true line
         log(f"  hook corrected, rewriting the on-screen headline (was {hook['screen']!r})")
         hook = dict(hook, spoken=scenes[0][0], screen=make_screen(model, scenes[0][0], log))
@@ -415,13 +517,18 @@ Return {{"fixes": []}} if every line is correct.""", 0.1)
     if not natural_screen(screen, hook["spoken"]):
         screen = wrap_screen(hook["spoken"])
 
+    # 6. Instagram caption: a short description + hashtags to copy and paste when posting
+    caption, hashtags = make_caption(model, topic, [s[0] for s in scenes], news, outlets, log)
+
     must = subject_words or subject
     ids = {s["id"] for s in sources}
     script = {
+        "caption": caption, "hashtags": hashtags,
         "topic": topic, "style": "news" if news else "clear story", "hook": screen, "hook_spoken": hook["spoken"],
         "hook_options": [{"spoken": h["spoken"], "screen": h["screen"], "why": h.get("why", "")} for h in hook_options],
         "scenes": [[line, photo if subject in photo.lower() else f"{subject} {photo}", must] for line, photo, _ in scenes],
         "line_sources": [src if src in ids else "" for _, _, src in scenes],
+        "photo_names": photo_names,
         "sources": [{"id": s["id"], "title": s["title"], "url": s.get("url", "")} for s in sources],
     }
     Path(out_path).write_text(json.dumps(script, indent=2, ensure_ascii=False), encoding="utf-8")

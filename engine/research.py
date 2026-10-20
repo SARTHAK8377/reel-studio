@@ -24,6 +24,36 @@ def read_pdf(path):
     return {"title": title, "url": "", "kind": "pdf", "text": text}
 
 
+def biggest(src, page):
+    """The largest version of an article photo: from the page's srcset if it lists one, else a known size pattern."""
+    name = src.split("/")[-1].split("?")[0]
+    best, best_w = src, 0
+    for srcset in re.findall(r'srcset="([^"]+)"', page, re.I):
+        for part in srcset.split(","):
+            bits = part.strip().split()
+            if len(bits) == 2 and name in bits[0] and bits[1].endswith("w") and bits[1][:-1].isdigit():
+                if int(bits[1][:-1]) > best_w:
+                    best, best_w = html.unescape(bits[0]), int(bits[1][:-1])
+    if not best_w:  # e.g. BBC serves /news/480/...; 1024 is a size it always has
+        best = re.sub(r"(ichef\.bbci\.co\.uk/(?:news|ace/standard))/\d+/", r"\1/1024/", best)
+    return best
+
+
+def article_images(page):
+    """Photos inside the article's main text (not ads, logos or 'more stories' thumbnails), largest size, with captions."""
+    import trafilatura
+    xml = trafilatura.extract(page, include_images=True, output_format="xml", include_comments=False) or ""
+    found, seen = [], set()
+    for tag in re.findall(r"<graphic[^>]*>", xml):
+        src = html.unescape((re.search(r'src="([^"]+)"', tag) or [None, ""])[1])
+        alt = html.unescape((re.search(r'alt="([^"]*)"', tag) or [None, ""])[1])
+        if src.startswith("http") and not re.search(r"logo|icon|avatar|placeholder|sprite|\.svg", src, re.I):
+            src = biggest(src, page)
+            if src not in seen:
+                seen.add(src); found.append({"url": src, "alt": alt})
+    return found[:8]
+
+
 def read_link(url):
     import trafilatura
     downloaded = trafilatura.fetch_url(url)
@@ -33,8 +63,13 @@ def read_link(url):
     meta = trafilatura.extract_metadata(downloaded)
     if len(text) < 200:
         raise ValueError("found almost no article text on the page")
+    try:
+        images = article_images(downloaded)
+    except Exception:
+        images = []
     return {"title": (meta.title if meta and meta.title else url), "url": url, "kind": "link", "text": text,
             "image": (meta.image if meta and meta.image and meta.image.startswith("http") else ""),
+            "images": images,
             "site": (meta.sitename if meta and meta.sitename else urllib.parse.urlparse(url).netloc)}
 
 
@@ -107,11 +142,20 @@ def wikipedia_images(topic, title=None, limit=12):
     return out[:limit]
 
 
-def photo_pool(topic, sources, press_photos=False, log=print):
-    """Photos picked up during research, tried before any general photo search:
-    the topic's Wikipedia article images (free) and, only if you opt in, the main image of each article/link
-    (usually copyrighted news or press photos, credited to the site)."""
+def photo_pool(topic, sources, press_photos=False, log=print, photo_articles=()):
+    """Photos picked up during research, tried before any general photo search. Story photos come first:
+    only if you opt in, every photo inside each article/link (usually copyrighted news or press photos, credited
+    to the site), also from photo_articles (news articles read only for their photos, not their facts);
+    then the topic's Wikipedia article images (free)."""
     pool, problems = [], []
+    if press_photos:
+        press = []
+        for s in list(sources) + list(photo_articles):
+            credit = f"Image from {s.get('site') or s['url']} ({s['url']}) - may be copyrighted"
+            for im in ([{"url": s["image"], "alt": ""}] if s.get("image") else []) + s.get("images", []):
+                press.append({"url": im["url"], "title": im.get("alt") or s["title"], "kind": "press", "credit": credit})
+        pool += press
+        log(f"press photos from articles: {len(press)}")
     wiki_title = next((s.get("wiki_title") for s in sources if s.get("wiki_title")), None)
     try:
         imgs = wikipedia_images(topic, wiki_title)
@@ -119,16 +163,12 @@ def photo_pool(topic, sources, press_photos=False, log=print):
         log(f"wikipedia photos: {len(imgs)}")
     except Exception as e:
         problems.append(f"Wikipedia photos failed: {e}")
-    if press_photos:
-        press = [{"url": s["image"], "title": s["title"], "kind": "press",
-                  "credit": f"Image from {s.get('site') or s['url']} ({s['url']}) - may be copyrighted"}
-                 for s in sources if s.get("image")]
-        pool += press
-        log(f"press photos from articles: {len(press)}")
     seen, unique = set(), []
-    for p in pool:
-        if p["url"] and p["url"] not in seen:
-            seen.add(p["url"]); unique.append(p)
+    for p in pool:  # the same picture often appears twice (preview + in the text), under different sizes or paths
+        name = p["url"].split("?")[0].rstrip("/").split("/")[-1].lower()
+        key = re.sub(r"(\.(jpe?g|png|webp))+$", "", name)
+        if p["url"] and key not in seen:
+            seen.add(key); unique.append(p)
     return unique, problems
 
 
