@@ -14,8 +14,11 @@ back to the website so you can watch and download it.
   reel shows its top 3 hooks with a **Remake with this hook** button.
 - **Script:** a short, clear story of 7 lines, checked for clarity and facts, with each line tagged with
   its source.
-- **Photos and clips:** free sources (Wikipedia, Wikimedia Commons, Openverse, NASA, and optionally Flickr,
-  Pexels and Pixabay). The model looks at every photo and rejects wrong or fake-looking ones.
+- **Photos and clips:** the story's own photos first: every photo inside the news articles (if press photos are
+  turned on, even with "Only use my sources", where other articles are read for photos only) and Wikipedia
+  photos of the people and places named in the script. Then free sources (Wikimedia Commons, Openverse, NASA,
+  and optionally Flickr, Pexels and Pixabay). The model looks at every photo and rejects wrong, fake-looking or
+  wrong-event ones; a photo source that is down is skipped for the rest of the reel.
 - **Video:** 9:16, 1:1 or 16:9, 10 voices (via edge-tts), optional background music by mood (Kevin MacLeod
   tracks from Wikimedia Commons).
 - **Library:** watch, download, remake, stop or delete reels, one at a time or several together.
@@ -32,9 +35,11 @@ library  <--------------------------  reel.mp4, script, photo credits
 ```
 
 The website sends each batch to a private Kaggle notebook (`<your-username>/reel-studio-worker`) and
-downloads the result when it finishes. A run usually takes 10 to 15 minutes once Kaggle gives it a GPU.
-Waiting in Kaggle's queue does not use your GPU hours. If no T4 GPU is free after 15 minutes, the site
-retries on a P100 (with the smaller `gemma3:12b` model).
+downloads the result when it finishes. A run usually takes about 10 to 13 minutes once Kaggle gives it a GPU
+(a second reel in the same batch adds about 4 to 6). Waiting in Kaggle's queue does not use your GPU hours.
+The site always waits for the T4 x2 GPUs (full `gemma3:27b` model). To fall back to a P100 with the smaller
+`gemma3:12b` instead, set `GPU_WAIT_MINUTES` in `app.py` to a number of minutes.
+If the website is closed or restarted while a reel is on Kaggle, it picks that run up again when it starts.
 
 ## Setup (Windows)
 

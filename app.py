@@ -110,7 +110,7 @@ def b64(obj):
     return base64.b64encode(json.dumps(obj).encode()).decode()
 
 
-GPU_WAIT_MINUTES = 15  # queued longer than this on T4 x2: try the single P100 instead
+GPU_WAIT_MINUTES = None  # off: always wait for T4 x2 (the full gemma3:27b model). Set a number, e.g. 15, to switch to the P100 after that many minutes in the queue
 GPUS = {"NvidiaTeslaT4": "T4 x2", "NvidiaTeslaP100": "P100"}
 
 
@@ -155,7 +155,16 @@ def research_job(job):
         raise RuntimeError("You chose 'only my sources', but none of them could be read.")
     (jdir / "sources.json").write_text(json.dumps(sources, indent=2, ensure_ascii=False), encoding="utf-8")
     note(job, f"{len(sources)} source(s) ready")
-    pool, problems = research.photo_pool(job["topic"], sources, job.get("press_photos", False), log=lambda m: note(job, m))
+    photo_articles = []
+    if job["only_sources"] and job.get("press_photos"):
+        # facts stay limited to your own sources, but the story's photos can come from other news articles too
+        try:
+            photo_articles, _ = research.search_news(job["topic"])
+            note(job, f"news articles read for photos only: {len(photo_articles)}")
+        except Exception as e:
+            note(job, f"skipped: news photo search failed: {e}")
+    pool, problems = research.photo_pool(job["topic"], sources, job.get("press_photos", False), log=lambda m: note(job, m),
+                                         photo_articles=photo_articles)
     for p in problems:
         note(job, "skipped: " + p)
     cfg = settings()
@@ -212,13 +221,20 @@ def run_batch(jobs):
                gpu=GPUS[machine])
 
     time.sleep(45)
+    watch(ready, folder, ref, machine, started, pushed, push)
+
+
+def watch(ready, folder, ref, machine, started, pushed, push=None):
+    """Follow one Kaggle run until it ends, then hand out its results. Also used after a restart of the website,
+    to pick up a run that was already on Kaggle (push=None then: no GPU switch from here)."""
+    stale_since = None  # when Kaggle first looked finished without results from this run
     while True:
         status = kaggle_status(ref)
         settled = time.time() - pushed > 900  # right after a push, Kaggle can still report the previous run
         if status == "queued":
             waited = (time.time() - pushed) / 60
             stage = f"Waiting for a free Kaggle GPU ({GPUS[machine]}, {waited:.0f} min)"
-            if machine == "NvidiaTeslaT4" and waited >= GPU_WAIT_MINUTES:
+            if push and GPU_WAIT_MINUTES and machine == "NvidiaTeslaT4" and waited >= GPU_WAIT_MINUTES:
                 for job in ready:
                     note(job, f"No T4 GPU after {waited:.0f} min, trying the P100 instead (uses the smaller gemma3:12b model)")
                 ok, out = push("NvidiaTeslaP100")
@@ -245,15 +261,21 @@ def run_batch(jobs):
             out_dir = folder.parent / "result"
             shutil.rmtree(out_dir, ignore_errors=True)
             kaggle("kernels", "output", ref, "-p", str(out_dir), "-o", timeout=900)
-            if not (out_dir / ready[0]["id"]).exists() and not settled:
-                for job in ready:
-                    note(job, "Kaggle still shows the previous run, waiting...")
-                time.sleep(30)
-                continue
+            if not (out_dir / ready[0]["id"]).exists():
+                # No results from OUR run yet. Kaggle's status can belong to an older (e.g. cancelled) run while ours
+                # is still queued (tonight: 30 min), so only give up once it has looked finished-without-results for an hour.
+                if stale_since is None:
+                    stale_since = time.time()
+                    for job in ready:
+                        note(job, f"Kaggle says '{status}' but has no results from this run yet, waiting...")
+                if not settled or time.time() - stale_since < 60 * 60:
+                    time.sleep(30)
+                    continue
             for job in ready:
                 if not job.get("stopped"):
                     collect(job, out_dir / job["id"], status, out_dir / "batch_log.txt")
             return
+        stale_since = None  # Kaggle shows our run as queued/running again
         if time.time() - started > 6 * 3600:
             for job in ready:
                 fail(job, RuntimeError("Kaggle took more than 6 hours; giving up."))
@@ -290,7 +312,23 @@ def next_job(block=True):
             return load(jid)
 
 
+RESUME = []  # after a restart: [jobs of the Kaggle run that was still going], picked up before anything new is sent
+
+
 def worker_loop():
+    if RESUME:  # first finish following the run that was on Kaggle when the website closed
+        ready = RESUME[0]
+        try:
+            ref = f"{kaggle_user()}/{SLUG}"
+            for job in ready:
+                note(job, "The website restarted; following this reel's Kaggle run again")
+            watch(ready, JOBS / ready[0]["id"] / "kaggle", ref, "NvidiaTeslaT4", ready[0]["kaggle_started"],
+                  ready[0]["kaggle_started"])
+        except Exception as e:
+            traceback.print_exc()
+            for job in ready:
+                if load(job["id"]).get("status") not in ("done", "error", "stopped"):
+                    fail(job, e)
     while True:  # nothing below may end this loop: if it did, no reel would ever start again
         jobs = []
         try:
@@ -530,9 +568,20 @@ def save_settings():
 
 def resume_unfinished():
     """After a restart: reels still waiting in line go back in line (nothing was started for them yet);
-    reels that were being made are marked stopped, so you can remake them."""
+    the most recent Kaggle run that was still going is followed again (RESUME); anything else that was being made
+    is marked stopped, so you can remake it."""
+    on_kaggle = [json.loads(p.read_text(encoding="utf-8")) for p in sorted(JOBS.glob("*/job.json"))]
+    on_kaggle = [j for j in on_kaggle if j.get("status") == "working" and j.get("kaggle_started") and not j.get("stopped")]
+    if on_kaggle:
+        latest = max(j["kaggle_started"] for j in on_kaggle)
+        batch = [j for j in on_kaggle if j["kaggle_started"] == latest]
+        batch.sort(key=lambda j: (j.get("batch") or [j["id"]]).index(j["id"]) if j["id"] in (j.get("batch") or []) else 0)
+        RESUME.append(batch)
+    resumed = {j["id"] for b in RESUME for j in b}
     for p in sorted(JOBS.glob("*/job.json")):
         j = json.loads(p.read_text(encoding="utf-8"))
+        if j["id"] in resumed:
+            continue
         if j.get("status") == "queued" and not j.get("stopped"):
             work_queue.put(j["id"])
         elif j.get("status") in ("queued", "working"):
