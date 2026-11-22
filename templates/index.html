@@ -313,6 +313,72 @@
   .state.on { color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); }
   .state.off { color: var(--faint); background: var(--sunk); }
 
+  /* ---------- discover ---------- */
+  .dctl { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 22px; }
+  .dcard { padding: 18px; display: grid; gap: 14px; height: 100%; align-content: start; }
+  .dcard h3 { margin: 0; font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  .drow { display: flex; gap: 10px; align-items: end; flex-wrap: wrap; }
+  .dfield { display: grid; gap: 6px; font-size: 13px; color: var(--muted); font-weight: 500; }
+  .dfield select { padding: 8px 10px; min-width: 96px; }
+  .dstatus { font-size: 13px; color: var(--muted); display: grid; gap: 4px; }
+  .dstatus .warn { color: var(--warn); }
+  .dstatus .bad { color: var(--bad); }
+  .dstatus i.spin { display: inline-block; animation: spin 1s linear infinite; color: var(--accent); }
+  .switch { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; }
+  .switch input { position: absolute; opacity: 0; pointer-events: none; }
+  .switch span { width: 38px; height: 22px; border-radius: 99px; background: var(--sunk); box-shadow: inset 0 0 0 1px var(--line-2);
+                 position: relative; transition: background .25s var(--ease); }
+  .switch span::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%;
+                        background: var(--muted); transition: transform .25s var(--ease), background .25s var(--ease); }
+  .switch input:checked + span { background: var(--accent); box-shadow: none; }
+  .switch input:checked + span::after { transform: translateX(16px); background: var(--accent-ink); }
+  .switch input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .switch b { font-weight: 600; min-width: 22px; }
+  #dAutoCard.on { box-shadow: inset 0 0 0 1px var(--accent); }
+  .dlist { display: grid; gap: 10px; }
+  .story { display: grid; grid-template-columns: 24px 58px minmax(0, 1fr) auto; gap: 16px; align-items: start; padding: 16px;
+           border-radius: 14px; background: var(--panel); box-shadow: inset 0 0 0 1px var(--line); transition: box-shadow .2s var(--ease); }
+  .story:hover { box-shadow: inset 0 0 0 1px var(--line-2); }
+  .story.sel { box-shadow: inset 0 0 0 1.5px var(--accent); background: color-mix(in srgb, var(--accent) 5%, var(--panel)); }
+  .story .pick { width: 22px; height: 22px; margin-top: 16px; border-radius: 7px; border: 0; cursor: pointer; display: grid; place-items: center;
+                 background: var(--sunk); box-shadow: inset 0 0 0 1.5px var(--line-2); color: transparent; }
+  .story.sel .pick { background: var(--accent); box-shadow: none; color: var(--accent-ink); }
+  .score { width: 58px; height: 58px; border-radius: 50%; display: grid; place-items: center; position: relative;
+           background: conic-gradient(var(--sc) calc(var(--v) * 1%), var(--line) 0); }
+  .score::before { content: ""; position: absolute; inset: 4px; border-radius: 50%; background: var(--panel); }
+  .score b { position: relative; font: 600 18px "Geist Mono", monospace; }
+  .story .t { font-weight: 600; font-size: 16px; letter-spacing: -.01em; line-height: 1.35; }
+  .story .sum { color: var(--muted); font-size: 14px; margin-top: 4px; display: -webkit-box; -webkit-line-clamp: 2;
+                -webkit-box-orient: vertical; overflow: hidden; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+  .chip { font-size: 12px; padding: 2px 9px; border-radius: 99px; background: var(--sunk); box-shadow: inset 0 0 0 1px var(--line);
+          color: var(--muted); display: inline-flex; gap: 5px; align-items: center; }
+  .chip.hot { color: var(--accent); background: var(--accent-soft); box-shadow: none; }
+  .parts { display: flex; gap: 3px; margin-top: 10px; max-width: 320px; }
+  .parts i { height: 4px; border-radius: 99px; background: var(--line); overflow: hidden; display: block; }
+  .parts i > u { display: block; height: 100%; background: var(--accent); }
+  .story details { margin-top: 8px; font-size: 13px; }
+  .story summary { cursor: pointer; color: var(--faint); list-style: none; display: inline-flex; gap: 5px; align-items: center; }
+  .story summary::-webkit-details-marker { display: none; }
+  .story summary:hover { color: var(--ink); }
+  .story details ul { margin: 8px 0 0; padding: 0; list-style: none; display: grid; gap: 5px; }
+  .story details a { text-decoration: none; color: var(--muted); }
+  .story details a:hover { color: var(--accent); }
+  .story details a b { color: var(--ink); font-weight: 500; }
+  .story .acts { display: grid; gap: 8px; justify-items: end; }
+  .dmade { margin-top: 26px; }
+  .dmade h3 { font-size: 14px; font-weight: 600; margin: 0 0 10px; color: var(--muted); display: flex; gap: 8px; align-items: center; }
+  .dmade a { display: flex; gap: 10px; align-items: center; padding: 8px 2px; font-size: 14px; text-decoration: none; color: var(--muted);
+             border-bottom: 1px solid var(--line); }
+  .dmade a:hover { color: var(--ink); }
+  .dmade a span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  @media (max-width: 1080px) { .dctl { grid-template-columns: 1fr; } }
+  @media (max-width: 760px) {
+    .story { grid-template-columns: 22px 46px minmax(0, 1fr); gap: 12px; }
+    .story .acts { grid-column: 3; display: flex; justify-items: start; }
+    .score { width: 46px; height: 46px; } .score b { font-size: 15px; }
+  }
+
   /* ---------- toast ---------- */
   .toasts { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); display: grid; gap: 8px; z-index: 40; }
   .toast { padding: 10px 16px; border-radius: 99px; background: var(--ink); color: var(--bg); font-weight: 500; font-size: 14px;
@@ -356,6 +422,7 @@
   <nav class="rail" aria-label="Main">
     <div class="brand"><span class="mark"><i class="ph-fill ph-film-slate"></i></span>Reel Studio</div>
     <a class="nav" href="#create" data-view="create"><i class="ph ph-sparkle"></i>Create</a>
+    <a class="nav" href="#discover" data-view="discover"><i class="ph ph-compass"></i>Discover<span class="count" id="discCount" hidden></span></a>
     <a class="nav" href="#library" data-view="library"><i class="ph ph-squares-four"></i>Library<span class="count" id="libCount" hidden></span></a>
     <a class="nav" href="#settings" data-view="settings"><i class="ph ph-sliders-horizontal"></i>Settings</a>
     <div class="rail-foot">
@@ -471,6 +538,37 @@
       </div>
     </section>
 
+    <!-- DISCOVER -->
+    <section class="view" id="v-discover" hidden>
+      <div class="head">
+        <div><span class="eyebrow">Discover</span><h1>Stories worth a reel</h1>
+          <p class="lede">New headlines from 13 news feeds and Google Trends, grouped by story and scored out of 100. Scanning runs on this laptop and uses no GPU hours.</p></div>
+      </div>
+      <div class="dctl">
+        <div class="shell"><div class="panel dcard">
+          <h3><i class="ph ph-radar"></i>Scanning</h3>
+          <div class="drow">
+            <label class="dfield">Scan every <select class="input" id="dEvery"></select></label>
+            <label class="dfield">Show top <select class="input" id="dShow"></select></label>
+            <button class="ghost" id="dScan"><i class="ph ph-arrow-clockwise"></i>Scan now</button>
+          </div>
+          <div class="dstatus" id="dStatus"></div>
+        </div></div>
+        <div class="shell"><div class="panel dcard" id="dAutoCard">
+          <h3><i class="ph ph-lightning"></i>Auto mode
+            <label class="switch"><input type="checkbox" id="dAuto"><span></span><b id="dAutoLabel">Off</b></label></h3>
+          <div class="drow">
+            <label class="dfield">Make <select class="input" id="dCount"></select></label>
+            <label class="dfield">reel(s) every <select class="input" id="dHours"></select></label>
+            <label class="dfield">if score is at least <select class="input" id="dMin"></select></label>
+          </div>
+          <div class="dstatus" id="dAutoStatus"></div>
+        </div></div>
+      </div>
+      <div class="dlist" id="dList"></div>
+      <div class="dmade" id="dMade"></div>
+    </section>
+
     <!-- LIBRARY -->
     <section class="view" id="v-library" hidden>
       <div class="head">
@@ -508,6 +606,12 @@
   <button class="ghost danger" id="selDelete"><i class="ph ph-trash"></i>Delete</button>
   <button class="icon-btn" id="selCancel" aria-label="Stop selecting"><i class="ph ph-x"></i></button>
 </div>
+<div class="selbar" id="dbar" role="toolbar" aria-label="Selected stories">
+  <b id="dSelCount">0 selected</b>
+  <button class="ghost" id="dMakeSel"><i class="ph ph-film-strip"></i>Make reels</button>
+  <button class="ghost danger" id="dSkipSel"><i class="ph ph-eye-slash"></i>Skip</button>
+  <button class="icon-btn" id="dSelCancel" aria-label="Clear selection"><i class="ph ph-x"></i></button>
+</div>
 <div class="toasts" id="toasts" aria-live="polite"></div>
 
 <script>
@@ -538,10 +642,11 @@ try { setTheme(localStorage.getItem("theme") || "dark"); } catch (e) { setTheme(
 function route() {
   const h = location.hash.slice(1) || "create";
   const [view, id] = h.split("/");
-  const v = ["create", "library", "settings"].includes(view) ? view : (view === "reel" ? "library" : "create");
+  const v = ["create", "discover", "library", "settings"].includes(view) ? view : (view === "reel" ? "library" : "create");
   $$(".view").forEach(s => s.hidden = s.id !== "v-" + v);
   $$(".nav").forEach(a => a.classList.toggle("on", a.dataset.view === v));
   if (v === "settings") loadKeys();
+  if (v === "discover") loadDiscover(); else { dSel.clear(); updateDbar(); }
   if (v !== "library" && selecting) setSelecting(false);
   if (view === "reel" && id) openDrawer(id); else closeDrawer(false);
 }
@@ -647,8 +752,8 @@ function renderQueue() {
   const q = JOBS.filter(working);
   $("#qCount").textContent = q.length ? q.length : "";
   $("#queue").innerHTML = q.length ? q.map(j => `
-    <div class="qitem" data-open="${esc(j.id)}">
-      <div class="t" style="display:flex;gap:8px;align-items:center"><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis">${esc(j.topic)}</span>
+    <div class="qitem" data-open="${esc(j.kind === "hooks" ? j.parent_id : j.id)}">
+      <div class="t" style="display:flex;gap:8px;align-items:center"><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis">${j.kind === "hooks" ? "New hooks: " : ""}${esc(j.topic)}</span>
         <button class="icon-btn" data-stop="${esc(j.id)}" title="Stop making this reel" aria-label="Stop making this reel" style="width:28px;height:28px"><i class="ph-fill ph-stop"></i></button></div>
       <div class="s"><i class="ph ${stageIcon(j)}"></i>${esc(stageText(j))}${j.forced_hook ? " · chosen hook" : ""}</div>
       <div class="bar"><i style="width:${progress(j)}%"></i></div>
@@ -696,7 +801,7 @@ let selecting = false;
 const selected = new Set();
 function shown() {
   const f = $("#filter input:checked").value, q = $("#q").value.trim().toLowerCase();
-  return JOBS.filter(j => (f === "all" || (f === "work" ? working(j) : f === "error" ? ended(j) : j.status === f)) && (!q || j.topic.toLowerCase().includes(q)));
+  return JOBS.filter(j => j.kind !== "hooks" && (f === "all" || (f === "work" ? working(j) : f === "error" ? ended(j) : j.status === f)) && (!q || j.topic.toLowerCase().includes(q)));
 }
 function renderGrid(force) {
   const list = shown();
@@ -740,7 +845,7 @@ function renderGrid(force) {
     }
     existing.forEach(el => el.remove());
   }
-  const n = JOBS.length;
+  const n = JOBS.filter(j => j.kind !== "hooks").length;
   $("#libCount").hidden = !n; $("#libCount").textContent = n;
 }
 $$("#filter input").forEach(i => i.onchange = () => renderGrid(true));
@@ -825,21 +930,38 @@ function linesHTML(s) {
       ${s.line_sources?.[i] ? `<span class="tag">${esc(s.line_sources[i])}</span>` : "<span></span>"}
       <span class="photo"><i class="ph ph-image"></i>${esc(sc[1])}</span></li>`).join("")}</ol>`;
 }
+const hookPage = {};  // reel id -> index of the first hook shown
 function hooksHTML(j) {
   const s = j.script || {}, opts = s.hook_options || [];
   if (!opts.length) return `<div class="note"><i class="ph ph-info"></i><div>This reel was made before hook ranking existed, so there are no other hooks to choose from. Use <b>Remake</b> to get a new set.</div></div>`;
   const used = s.hook_spoken || s.scenes?.[0]?.[0];
-  return `<div class="note"><i class="ph ph-lightbulb"></i><div>The model wrote 15 hooks and ranked these 3 best. Remaking keeps the same topic, sources and settings, and writes a new script around the hook you pick.</div></div>
-    <div class="hooks">${opts.map((h, i) => {
-      const isUsed = h.spoken === used;
-      return `<div class="hook-card ${isUsed ? "used" : ""}"><div class="rank">${i + 1}</div><div>
-        <div class="spoken">${esc(h.spoken)}</div>
-        <div class="scr">${esc(h.screen)}</div>
-        ${h.why ? `<div class="why">${esc(h.why)}</div>` : ""}
-        <div class="foot">${isUsed ? `<span class="used-label"><i class="ph-fill ph-check-circle"></i>Used in this reel</span>` : ""}
-          <button class="ghost" data-remake="${i}"><i class="ph ph-arrows-clockwise"></i>Remake with this hook</button></div>
-      </div></div>`;
-    }).join("")}</div>`;
+  if (j.new_hooks_from != null && hookPage[j.id + ":seen"] !== j.new_hooks_from) {  // new hooks just arrived: show them
+    hookPage[j.id] = Math.floor(j.new_hooks_from / 3) * 3; hookPage[j.id + ":seen"] = j.new_hooks_from;
+  }
+  const start = Math.min(hookPage[j.id] || 0, Math.max(0, opts.length - 1));
+  const page = opts.slice(start, start + 3);
+  const more = start + 3 < opts.length;
+  const writing = j.hooks_job && JOBS.find(x => x.id === j.hooks_job && working(x));
+  const cards = page.map((h, k) => {
+    const i = start + k, isUsed = h.spoken === used;
+    return `<div class="hook-card ${isUsed ? "used" : ""}"><div class="rank">${i + 1}</div><div>
+      <div class="spoken">${esc(h.spoken)}</div>
+      <div class="scr">${esc(h.screen)}</div>
+      ${h.why ? `<div class="why">${esc(h.why)}</div>` : ""}
+      <div class="foot">${isUsed ? `<span class="used-label"><i class="ph-fill ph-check-circle"></i>Used in this reel</span>` : ""}
+        <button class="ghost" data-remake="${i}"><i class="ph ph-arrows-clockwise"></i>Remake with this hook</button></div>
+    </div></div>`;
+  }).join("");
+  const status = writing
+    ? `<div class="note"><i class="ph ph-hourglass-medium"></i><div><b>Writing new hooks on Kaggle.</b> ${esc(stageText(writing))}. They will appear here when ready (usually 6 to 8 minutes once Kaggle gives it a GPU).</div></div>`
+    : "";
+  return `<div class="note"><i class="ph ph-lightbulb"></i><div>Hooks ${start + 1} to ${start + page.length} of ${opts.length}, best first. Remaking keeps the same topic, sources and settings, and writes a new script around the hook you pick.</div></div>
+    ${status}
+    <div class="hooks">${cards}</div>
+    <div class="row-btns" style="margin-top:14px">
+      ${opts.length > 3 ? `<button class="ghost" data-hook-page><i class="ph ph-shuffle"></i>${more ? "Show 3 more" : "Back to the best 3"}</button>` : ""}
+      <button class="ghost" data-new-hooks ${writing ? "disabled" : ""} title="A short Kaggle run that writes a fresh set of hooks (no new video)"><i class="ph ph-sparkle"></i>Write new hooks</button>
+    </div>`;
 }
 function captionText(s) {
   return [s.caption || "", (s.hashtags || []).join(" ")].filter(Boolean).join("\n\n");
@@ -963,6 +1085,23 @@ $("#dpanel").addEventListener("click", async e => {
     const j = JOBS.find(x => x.id === openId);
     return toast(j && await copyText(captionText(j.script || {})) ? "Caption copied. Paste it into Instagram" : "Could not copy. Select the text and copy it", !j);
   }
+  if (e.target.closest("[data-hook-page]")) {
+    const j = JOBS.find(x => x.id === openId), n = (j?.script?.hook_options || []).length;
+    hookPage[openId] = (hookPage[openId] || 0) + 3 < n ? (hookPage[openId] || 0) + 3 : 0;
+    lastDrawer = ""; return renderDrawer();
+  }
+  const nh = e.target.closest("[data-new-hooks]");
+  if (nh) {
+    nh.disabled = true;
+    try {
+      const res = await fetch(`/api/jobs/${openId}/new-hooks`, { method: "POST" });
+      const d = await res.json();
+      if (!res.ok) { toast(d.error || "Could not start", true); nh.disabled = false; return; }
+      toast("Writing new hooks. They will appear in this tab when ready");
+      await refresh(); lastDrawer = ""; renderDrawer();
+    } catch (err) { toast("The website server is not running", true); nh.disabled = false; }
+    return;
+  }
   const r = e.target.closest("[data-remake]");
   if (r) {
     r.disabled = true;
@@ -1011,15 +1150,141 @@ $("#keys").addEventListener("click", async e => {
   toast(b.dataset.clear ? "Key removed" : "Key saved"); loadKeys();
 });
 
+/* ---------- discover ---------- */
+let DISC = null, dControlsKey = "", dListKey = "";
+const dSel = new Set();
+const clock = t => new Date(t * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+const everyLabel = m => m < 60 ? `${m} min` : `${m / 60} hour${m > 60 ? "s" : ""}`;
+const scoreColor = n => n >= 70 ? "var(--accent)" : n >= 50 ? "var(--warn)" : "var(--faint)";
+const opts = (list, cur, label = x => x) => list.map(x => `<option value="${x}" ${+x === +cur ? "selected" : ""}>${esc(label(x))}</option>`).join("");
+
+async function loadDiscover() {
+  try { DISC = await (await fetch("/api/discover")).json(); renderDiscover(); } catch (e) {}
+}
+function renderDiscover() {
+  const d = DISC, s = d.settings, now = Date.now() / 1000;
+  $("#discCount").hidden = !d.above_min; $("#discCount").textContent = d.above_min;
+  const ck = JSON.stringify([s, d.choices]);
+  if (ck !== dControlsKey && !document.activeElement?.closest?.(".dctl select")) {
+    dControlsKey = ck;
+    $("#dEvery").innerHTML = opts(d.choices.every_min, s.every_min, everyLabel);
+    $("#dShow").innerHTML = opts(d.choices.show, s.show, n => `${n} stories`);
+    $("#dCount").innerHTML = opts(d.choices.auto_count, s.auto_count);
+    $("#dHours").innerHTML = opts(d.choices.auto_hours, s.auto_hours, h => `${h} hour${h > 1 ? "s" : ""}`);
+    $("#dMin").innerHTML = opts([30, 40, 50, 55, 60, 65, 70, 75, 80, 90], s.min_score);
+    $("#dAuto").checked = s.auto;
+  }
+  $("#dAutoLabel").textContent = s.auto ? "On" : "Off";
+  $("#dAutoCard").classList.toggle("on", s.auto);
+  $("#dScan").disabled = d.scanning;
+  // scanning status line
+  let st;
+  if (d.scanning) st = `<span><i class="ph ph-circle-notch spin"></i> Scanning: ${esc(d.progress || "reading the news")}</span>`;
+  else if (!d.last_scan) st = `<span>No scan yet. The first scan starts in a moment.</span>`;
+  else st = `<span>Last scan: ${ago(d.last_scan)} (${clock(d.last_scan)}) · next at ${clock(Math.max(d.next_scan, now))}</span>`;
+  if (d.error) st += `<span class="bad">Last scan failed: ${esc(d.error)}</span>`;
+  else if (d.problems?.length) st += `<span class="warn" title="${esc(d.problems.join("\n"))}">${d.problems.length} feed(s) could not be read last time</span>`;
+  $("#dStatus").innerHTML = st;
+  // auto status
+  const gpu = d.gpu_week_hours;
+  let as = s.auto && d.auto_next
+    ? `<span>Next batch at <b style="color:var(--ink)">${clock(d.auto_next)}</b>: the best ${s.auto_count} found by then with a score of ${s.min_score}+ (${d.above_min} right now)</span>`
+    : `<span>Off. When on, it makes the best ${s.auto_count} stories every ${s.auto_hours} hour${s.auto_hours > 1 ? "s" : ""}, skipping any below ${s.min_score}.</span>`;
+  if (d.auto_last) as += `<span>Last batch ${ago(d.auto_last.at)}: ${d.auto_last.made ? `${d.auto_last.made} reel(s) made` : "nothing scored high enough"}</span>`;
+  as += `<span class="${gpu > 25 ? "bad" : gpu > 15 ? "warn" : ""}">At most about ${gpu} GPU hours a week (you get 30; about ${d.gpu_per_reel} min per reel)</span>`;
+  $("#dAutoStatus").innerHTML = as;
+  // story list (only redrawn when it changes, so open source lists stay open)
+  for (const id of [...dSel]) if (!d.stories.some(x => x.id === id)) dSel.delete(id);
+  const lk = JSON.stringify([d.stories.map(x => [x.id, x.score, x.site_count, x.reasons]), [...dSel], d.last_scan, d.scanning && !d.last_scan]);
+  if (lk !== dListKey) {
+    dListKey = lk;
+    $("#dList").innerHTML = d.stories.length ? d.stories.map(storyHTML).join("") : `<div class="empty"><i class="ph ph-compass"></i>
+      <b>${d.last_scan ? "No new stories right now" : "Looking for stories"}</b>
+      <span>${d.last_scan ? "Everything found was already made, skipped or too old. Try Scan now later." : "The first scan reads the news and rates each story with the laptop AI. It takes a few minutes."}</span></div>`;
+  } else {
+    $$("#dList [data-ago]").forEach(el => el.textContent = ago(+el.dataset.ago));
+  }
+  $("#dMade").innerHTML = d.made.length ? `<h3><i class="ph ph-check-circle"></i>Made from Discover</h3>` + d.made.map(m =>
+    `<a href="#reel/${esc(m.job)}"><i class="ph ${m.how === "auto" ? "ph-lightning" : "ph-hand-pointing"}"></i><span>${esc(m.title)}</span>
+     <span class="mono" style="flex:none">${m.score ?? ""}</span><span style="flex:none">${ago(m.at)}</span></a>`).join("") : "";
+  updateDbar();
+}
+function storyHTML(x) {
+  const p = x.parts, sel = dSel.has(x.id);
+  const bars = [["Popular now", p.popular, 40], ["Growing fast", p.growth, 20], ["Reel potential", p.potential, 30], ["Fresh", p.fresh, 10]];
+  const tip = bars.map(([n, v, m]) => `${n}: ${Math.round(v)}/${m}`).join(" · ") + (x.ai ? "" : " (reel potential not rated yet)");
+  return `<div class="story ${sel ? "sel" : ""}" data-sid="${esc(x.id)}">
+    <button class="pick" data-pick="${esc(x.id)}" aria-pressed="${sel}" aria-label="Select this story"><i class="ph-bold ph-check"></i></button>
+    <div class="score" style="--v:${x.score};--sc:${scoreColor(x.score)}" title="${esc(tip)}"><b>${x.score}</b></div>
+    <div style="min-width:0">
+      <div class="t">${esc(x.title)}</div>
+      ${x.summary ? `<div class="sum">${esc(x.summary)}</div>` : ""}
+      <div class="chips">${x.reasons.map((r, i) => `<span class="chip ${/trending|growing/.test(r) ? "hot" : ""}">${i === 0 ? `<i class="ph ph-newspaper"></i>` : /trending/.test(r) ? `<i class="ph ph-trend-up"></i>` : ""}${esc(r)}</span>`).join("")}
+        <span class="chip"><i class="ph ph-clock"></i><span data-ago="${x.newest}">${ago(x.newest)}</span></span></div>
+      <div class="parts" title="${esc(tip)}">${bars.map(([n, v, m]) => `<i style="flex:${m}"><u style="width:${Math.min(100, v / m * 100)}%"></u></i>`).join("")}</div>
+      <details><summary><i class="ph ph-link"></i>${x.links.length} article${x.links.length > 1 ? "s" : ""}${x.reel_links.length ? `, ${x.reel_links.length} go${x.reel_links.length === 1 ? "es" : ""} to the reel as source${x.reel_links.length === 1 ? "" : "s"}` : ", the reel searches the news itself"}</summary>
+        <ul>${x.links.map(l => `<li><a href="${esc(l.url)}" target="_blank" rel="noopener"><b>${esc(l.site)}</b> · ${esc(l.title)}</a></li>`).join("")}</ul></details>
+    </div>
+    <div class="acts">
+      <button class="ghost" data-make="${esc(x.id)}"><i class="ph ph-film-strip"></i>Make reel</button>
+      <button class="ghost danger" data-skip="${esc(x.id)}" title="Hide this story"><i class="ph ph-eye-slash"></i>Skip</button>
+    </div></div>`;
+}
+function updateDbar() {
+  $("#dbar").classList.toggle("on", dSel.size > 0);
+  $("#dSelCount").textContent = `${dSel.size} selected`;
+  $("#dMakeSel").innerHTML = `<i class="ph ph-film-strip"></i>Make ${dSel.size} reel${dSel.size === 1 ? "" : "s"}`;
+}
+async function discoverAction(kind, ids) {
+  if (!ids.length) return;
+  try {
+    const r = await fetch(`/api/discover/${kind}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids }) });
+    const d = await r.json();
+    if (kind === "make") toast(d.made.length > 1 ? `${d.made.length} reels started` : d.made.length ? "Reel started" : "That story is gone. Refreshing.", !d.made.length);
+    else toast(ids.length > 1 ? `${ids.length} stories skipped` : "Story skipped");
+    ids.forEach(id => dSel.delete(id));
+    await loadDiscover(); refresh();
+  } catch (e) { toast("The website server is not running", true); }
+}
+async function saveDiscover(body) {
+  try {
+    DISC = await (await fetch("/api/discover/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })).json();
+    dControlsKey = ""; renderDiscover();
+  } catch (e) { toast("Could not save that setting", true); }
+}
+$("#dList").addEventListener("click", e => {
+  const b = e.target.closest("[data-pick],[data-make],[data-skip]");
+  if (!b) return;
+  if (b.dataset.pick) { dSel.has(b.dataset.pick) ? dSel.delete(b.dataset.pick) : dSel.add(b.dataset.pick); dListKey = ""; renderDiscover(); }
+  else if (b.dataset.make) { b.disabled = true; discoverAction("make", [b.dataset.make]); }
+  else discoverAction("skip", [b.dataset.skip]);
+});
+$("#dMakeSel").onclick = () => discoverAction("make", [...dSel]);
+$("#dSkipSel").onclick = () => discoverAction("skip", [...dSel]);
+$("#dSelCancel").onclick = () => { dSel.clear(); dListKey = ""; renderDiscover(); };
+$("#dScan").onclick = async () => {
+  $("#dScan").disabled = true;
+  await fetch("/api/discover/scan", { method: "POST" }).catch(() => {});
+  toast("Scan started"); setTimeout(loadDiscover, 1500);
+};
+$("#dEvery").onchange = e => saveDiscover({ every_min: e.target.value });
+$("#dShow").onchange = e => saveDiscover({ show: e.target.value });
+$("#dCount").onchange = e => saveDiscover({ auto_count: e.target.value });
+$("#dHours").onchange = e => saveDiscover({ auto_hours: e.target.value });
+$("#dMin").onchange = e => saveDiscover({ min_score: e.target.value });
+$("#dAuto").onchange = e => { saveDiscover({ auto: e.target.checked }); toast(e.target.checked ? "Auto mode on" : "Auto mode off"); };
+
 /* ---------- polling ---------- */
 async function refresh() {
   try {
     JOBS = await (await fetch("/api/jobs")).json();
     renderQueue(); renderGrid(); renderDrawer();
   } catch (e) {}
+  if (!$("#v-discover").hidden) loadDiscover();
 }
-route(); checkStatus(); refresh();
+route(); checkStatus(); refresh(); loadDiscover();
 setInterval(refresh, 5000); setInterval(checkStatus, 30000);
+setInterval(() => { if ($("#v-discover").hidden) loadDiscover(); }, 60000);  // keeps the Discover count in the menu fresh
 </script>
 </body>
 </html>
