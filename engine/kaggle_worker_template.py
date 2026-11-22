@@ -115,11 +115,18 @@ def setup():
 
 
 def make(job, model, out):
-    """One reel: script with the local LLM, then the video. Writes everything into `out`."""
+    """One reel: script with the local LLM, then the video. Writes everything into `out`.
+    A "hooks" job ("Write new hooks" for a finished reel) only writes fresh hooks into hooks.json."""
     timings = {}
     t = time.time()
     sys.path.insert(0, str(ENGINE))
     import write_script
+    if job.get("mode") == "hooks":
+        write_script.hooks_only(job["topic"], out / "hooks.json", job["sources"], job["only_sources"], job["news"],
+                                model, log=log, instructions=job.get("instructions", ""),
+                                hook_idea=job.get("hook_idea", ""), avoid=job.get("avoid", []))
+        timings["hooks"] = round(time.time() - t)
+        return timings
     script = write_script.write(job["topic"], out / "script.json", job["sources"], job["only_sources"],
                                 job["news"], "", model, log=log,
                                 instructions=job.get("instructions", ""), hook_idea=job.get("hook_idea", ""),

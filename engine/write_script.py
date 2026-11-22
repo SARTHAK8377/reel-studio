@@ -142,19 +142,33 @@ def scene_parts(s, subject):
 WEBSITE = re.compile(r"https?://|www\.|\b[\w-]+\.(com|org|net|co\.uk|co\.in|in|news|tv|io)\b|\bwebsite\b", re.I)
 
 
+HOST_PREFIXES = {"en", "m", "news", "edition", "amp", "mobile", "www2", "beta", "web"}
+COMMON_ACRONYMS = {"US", "UK", "UN", "EU", "AI", "TV", "NEW", "THE"}
+COMMON_WORDS = set("""the a an india indian news times mint express post sun mirror standard week today daily world live
+now star print wire hindu nation national global first new independent guardian telegraph tribune statesman pioneer
+herald chronicle observer journal gazette record review economist business politics science sport sports tech health
+money markets reuters""".split()) - {"reuters"}
+
+
 def outlet_names(sources, topic=""):
     """Names of the news sites the facts came from (e.g. "BBC", "BBC News", "Reuters"), which the script must not say.
     A name that is part of the topic itself (a reel about the BBC) is allowed."""
     names = set()
     for src in sources:
         host = urllib.parse.urlparse(src.get("url") or "").netloc.lower().removeprefix("www.")
-        if host:
-            names.add(host.split(".")[0])
-        if src.get("site"):
-            names.add(src["site"].strip())
-            names.add(src["site"].split()[0])
+        label = host.split(".")[0] if host else ""
+        if label and label not in HOST_PREFIXES:
+            names.add(label)                      # e.g. "economictimes", "deccanchronicle", "bbc"
+        site = (src.get("site") or "").strip()
+        if site:
+            names.add(site)                       # the full name, e.g. "The Economic Times", "India TV News"
+            first = site.split()[0]
+            if first.isupper() and 2 <= len(first) <= 6 and first not in COMMON_ACRONYMS:
+                names.add(first)                  # a short acronym: "BBC News" -> "BBC" (never "The", "India", ...)
     topic_words = set(re.findall(r"[a-z0-9]+", topic.lower()))
-    return [n for n in names if len(n) >= 3 and not set(re.findall(r"[a-z0-9]+", n.lower())) & topic_words]
+    # a single ordinary word ("Mint", "Express", "India") is never banned on its own: it would delete good sentences
+    return [n for n in names if len(n) >= 3 and n.lower() not in COMMON_WORDS
+            and not set(re.findall(r"[a-z0-9]+", n.lower())) & topic_words]
 
 
 def names_outlet(line, outlets):
@@ -272,6 +286,8 @@ Rules:
   or event, then the wider subject (for example "#TigerShroff", "#Mumbai", "#Bollywood", "#IndiaNews"). No spaces,
   no generic ones like "#viral", "#fyp" or "#reels".
 Return JSON: {{"caption": "...", "hashtags": ["#...", "#..."]}}""", 0.5)
+            if isinstance(data, list):  # some replies wrap the answer in a list
+                data = next((d for d in data if isinstance(d, dict)), {})
             caption = clean(field(data, ("caption", "description", "text")))
             if names_outlet(caption, outlets):  # same rule as the script: drop any sentence naming the source
                 caption = " ".join(x for x in re.split(r"(?<=[.!?])\s+", caption) if not names_outlet(x, outlets))
@@ -287,9 +303,144 @@ Return JSON: {{"caption": "...", "hashtags": ["#...", "#..."]}}""", 0.5)
             if caption:
                 log(f"  caption: {caption}\n  hashtags: {' '.join(tags[:MAX_HASHTAGS])}")
                 return caption, tags[:MAX_HASHTAGS]
+            log(f"  caption attempt gave no usable caption (reply: {str(data)[:150]})")
         except Exception as e:
             log(f"  caption attempt failed ({e})")
-    return "", []
+    # last resort, so a reel never has an empty caption: its first two lines, and hashtags from the topic and names
+    caption = " ".join(l for l in lines[:2] if not names_outlet(l, outlets))
+    words = re.findall(r"[A-Za-z0-9]+", topic)
+    tags = ["#" + "".join(x[:1].upper() + x[1:] for x in words[:4])] if words else []
+    for name in re.findall(r"(?<![.!?]\s)(?<!^)\b([A-Z][a-zA-Z0-9-]{2,}(?:\s[A-Z][a-zA-Z0-9-]{2,})*)", " ".join(lines)):
+        tag = "#" + re.sub(r"\W", "", name)
+        if tag.lower() not in [t.lower() for t in tags] and not any(re.sub(r"\W", "", o.lower()) in tag.lower() for o in outlets):
+            tags.append(tag)
+    log(f"  caption made from the script instead: {caption}\n  hashtags: {' '.join(tags[:MAX_HASHTAGS])}")
+    return caption, tags[:MAX_HASHTAGS]
+
+
+NEWS_HOOK_RULES = """This is NEWS. Every hook must tell the MAIN news of this story: what just happened, and to whom.
+Someone who hears only the hook should know what the story is about, and want to hear more. Never lead with a side
+detail or a background fact (how tall a rocket is, how many users an app has, how long someone's career was).
+Use a number only when the number IS the headline ("Hackers stole $6.3 billion from Binance").
+The on-screen headline is a short news headline, usually a statement. A question only if it is natural. Never "?!"."""
+NEWS_HOOK_EXAMPLES = """- spoken "Hackers just stole $6.3 billion from crypto giant Binance."  screen "$6.3 BILLION\\nSTOLEN FROM BINANCE"
+- spoken "Sir Patrick Stewart has died at 86."  screen "PATRICK STEWART\\nHAS DIED AT 86"
+- spoken "Hackers took over Ukraine's air raid warning app."  screen "UKRAINE'S AIR RAID\\nAPP WAS HACKED"
+- spoken "Drones hit mourners at a funeral in Sudan."  screen "DRONES HIT A\\nFUNERAL IN SUDAN"
+Bad (side details that hide the news): "Binance has over 300 million users.", "Patrick Stewart was on stage for
+seven decades.", "The rocket was 50 meters tall.", "One message told people to stock up for three weeks."""
+KEEP_HOOKS = 9  # ranked hooks kept: 3 shown, "Show 3 more" flips through the rest without using the GPU
+
+
+def brainstorm_hooks(model, rules, src_block, topic, news, has_sources, hook_idea="", instructions="", log=print,
+                     avoid=(), keep=KEEP_HOOKS):
+    """Steps 1-2: write 15 hooks, rank them, keep the best `keep` (best first), each with a natural on-screen headline.
+    avoid: hooks already shown to the creator ("Write new hooks"), which must not come back."""
+    hook_block = (f"\nThe creator suggested this hook idea: \"{hook_idea}\"\nInclude one hook that is their idea, "
+                  "cleaned up to fit the rules, and make at least 3 more hooks that are variations of it.\n"
+                  if hook_idea else "")
+    avoid_block = ("\nThese hooks were already offered and rejected. Write NEW ones with different wording and angles:\n"
+                   + "\n".join(f"- {a}" for a in avoid) + "\n") if avoid else ""
+
+    # 1. brainstorm 15 hooks that make sense instantly
+    def hooks():
+        raw = ask(model, f"""{rules}
+{src_block}
+Topic: {topic}
+
+Write {N_HOOKS} different hooks for the first 2 seconds of this reel. Each has:
+- "spoken": the first line the voice says. One plain sentence, max 12 words.
+- "screen": the on-screen headline. A short natural phrase or question in ALL CAPS, 2 lines separated by \\n,
+  max 20 characters per line. It must read like something a person would say, never a string of keywords.
+  Good: "ITS HEART STOPS\\nWHEN IT SWIMS", "SHARKS ARE OLDER\\nTHAN TREES", "WHY DOES THIS\\nCAR FLY?"
+  Bad: "OCTOPUS TRICK\\nHEART CONTROL", "SHARK SURVIVAL\\nMILLIONS YEARS", "OCTOPUS FACTS", and reaction filler like "WHAT THE...", "SERIOUSLY?!", "NO BRAINER", "WHOA".
+{NEWS_HOOK_RULES + chr(10) + "Good news hooks:" + chr(10) + NEWS_HOOK_EXAMPLES if news else
+ "A good hook is a clear, surprising, TRUE claim or question about the topic that anyone understands instantly," + chr(10)
+ + "and that makes them want the explanation. Good examples:" + chr(10) + HOOK_EXAMPLES}
+Bad: riddles, metaphors that need explaining, vague teasers, labels, exaggerations ("on demand", "can control"),
+and generic lines like "AI is changing quickly" or "Here's what you need to know".
+{"Vary the wording and angle (what happened, who it affects, what it means), but every hook tells the main news." if news
+ else "Vary the angle: surprising fact, \"you\" question, myth vs truth, comparison, number, mini-story."}
+{"Each hook must lead with ONE specific, surprising fact from the sources: a number, a name or a result." if has_sources and not news else ""}
+{hook_block}{avoid_block}
+Return JSON: {{"hooks": [{{"spoken": "...", "screen": "..."}}]}}""", 0.9)
+        data, seen = [], {a.lower() for a in avoid}
+        for h in first_list(raw):
+            if isinstance(h, dict):
+                spoken = clean(field(h, ("spoken", "line", "hook", "voice", "text")))
+                if spoken and stands_alone(spoken) and spoken.lower() not in seen and spoken not in [d["spoken"] for d in data]:
+                    screen = field(h, ("screen", "on_screen", "onscreen", "headline", "overlay", "caption"))
+                    data.append({"spoken": spoken, "screen": clean_screen(screen)})
+        if len(data) < 6:
+            raise ValueError(f"only {len(data)} usable hooks")
+        return data
+    hook_list = step("1 hooks", hooks)
+    for k, h in enumerate(hook_list):
+        log(f"  {k}. {h['spoken']}  |  {h['screen']!r}" + ("" if natural_screen(h["screen"], h["spoken"]) else "  [screen text not natural]"))
+
+    # 2. rank: (news: tells the main news) AND clear AND curious AND true; keep the best ones for "Show 3 more"
+    def rank():
+        listing = "\n".join(f"{k}. {h['spoken']}" for k, h in enumerate(hook_list))
+        tests = ("""1. Main news: it tells what actually happened in this story (the headline), not a side detail or background fact.
+2. Clear: anyone understands it instantly on the first listen, with no explanation.
+3. Gripping: it makes people stop scrolling and want to hear more.
+4. True and neutral: no exaggeration or misleading wording, accurate to the sources.""" if news else
+                 """1. Clear: a 12-year-old understands it instantly on the first listen, with no explanation.
+2. Curious: they really want to know why or how.
+3. True: no exaggeration or misleading wording.""")
+        data = ask(model, f"""You are the editor of a {"news" if news else "learning"} channel. Rank the best opening lines.
+Each must pass ALL tests:
+{tests}
+Reject lines that lean on a line before them ("That means...", "This is why..."), riddles, metaphors, vague teasers, generic lines, and lines that give the whole answer away.
+{"" if news else "Prefer a hook with a specific number, name or result."}
+Topic: {topic}
+{f'The creator suggested this hook idea: "{hook_idea}". If a hook based on it passes the tests, rank it first.' if hook_idea else ""}
+{f"The creator's instructions for this reel: {instructions}" if instructions else ""}
+
+{listing}
+
+Return JSON with the {keep} best, best first: {{"top": [{{"index": <number>, "why": "<one short sentence>"}}]}}""", 0.2)
+        raw = data.get("top", data.get("ranking", [])) if isinstance(data, dict) else data
+        picks = []
+        for r in raw if isinstance(raw, list) else []:
+            try:
+                i = int(str(field(r, ("index", "number", "best")) if isinstance(r, dict) else r).strip(". "))
+            except ValueError:
+                continue
+            if 0 <= i < len(hook_list) and i not in [p[0] for p in picks]:
+                picks.append((i, field(r, ("why", "reason")) if isinstance(r, dict) else ""))
+        if not picks:
+            raise ValueError("no usable ranking")
+        return picks[:keep]
+    picks = step("2 rank", rank)
+    options = []
+    for n, (i, why) in enumerate(picks):
+        h = dict(hook_list[i], why=clean(why))
+        h["screen"] = h["screen"].upper()
+        if not natural_screen(h["screen"], h["spoken"]):  # keyword soup or filler: write a proper headline
+            h["screen"] = make_screen(model, h["spoken"], log) if n < 3 else wrap_screen(h["spoken"])
+        options.append(h)
+    for n, h in enumerate(options, 1):
+        log(f"  top {n}: {h['spoken']}  |  {h['screen']!r}  ({h.get('why', '')})")
+    return options
+
+
+def hooks_only(topic, out_path, sources=(), only_sources=False, news=False, model=MODEL, log=print,
+               instructions="", hook_idea="", avoid=()):
+    """"Write new hooks" for a finished reel: only steps 1-2, avoiding the hooks already shown. Saves {"hooks": [...]}."""
+    t0 = time.perf_counter()
+    src_text = "\n\n".join(f"[{s['id']}] {s['title']}\n{s['text']}" for s in sources)
+    src_block = f"\n{source_rules(only_sources)}\n\nSOURCE MATERIAL:\n{src_text}\n" if sources else ""
+    rules = VOICE + ("\n\n" + NEWS_RULES if news else "")
+    instructions, hook_idea = clean(instructions)[:1500], clean(hook_idea)[:300]
+    if instructions:
+        rules += f"\n\nINSTRUCTIONS FROM THE CREATOR (follow these closely, unless they ask for something untrue):\n{instructions}"
+    options = brainstorm_hooks(model, rules, src_block, topic, news, bool(sources), hook_idea, instructions, log,
+                               avoid=list(avoid))
+    out = [{"spoken": h["spoken"], "screen": h["screen"], "why": h.get("why", "")} for h in options]
+    Path(out_path).write_text(json.dumps({"hooks": out}, indent=2, ensure_ascii=False), encoding="utf-8")
+    log(f"new hooks written in {time.perf_counter() - t0:.1f}s")
+    return out
 
 
 def write(topic, out_path, sources=(), only_sources=False, news=False, subject_words="", model=MODEL, log=print,
@@ -303,10 +454,6 @@ def write(topic, out_path, sources=(), only_sources=False, news=False, subject_w
     if instructions:  # the creator's own wishes, applied at every step
         rules += ("\n\nINSTRUCTIONS FROM THE CREATOR (follow these closely, unless they ask for something untrue"
                   f"{' or not supported by the sources' if sources else ''}):\n{instructions}")
-    hook_block = (f"\nThe creator suggested this hook idea: \"{hook_idea}\"\nInclude one hook that is their idea, "
-                  "cleaned up to fit the rules, and make at least 3 more hooks that are variations of it.\n"
-                  if hook_idea else "")
-
     if forced_hook:  # "remake with this hook": the creator already chose it
         hook = {"spoken": clean(forced_hook["spoken"]), "screen": forced_hook.get("screen") or ""}
         if not natural_screen(hook["screen"].upper(), hook["spoken"]):
@@ -314,81 +461,8 @@ def write(topic, out_path, sources=(), only_sources=False, news=False, subject_w
         hook_options = list(forced_options or [])
         log(f"  using the chosen hook: {hook['spoken']}  |  {hook['screen']!r}")
     else:
-        # 1. brainstorm 15 hooks that make sense instantly
-        def hooks():
-            raw = ask(model, f"""{rules}
-{src_block}
-Topic: {topic}
-
-Write {N_HOOKS} different hooks for the first 2 seconds of this reel. Each has:
-- "spoken": the first line the voice says. One plain sentence, max 12 words.
-- "screen": the on-screen headline. A short natural phrase or question in ALL CAPS, 2 lines separated by \\n,
-  max 20 characters per line. It must read like something a person would say, never a string of keywords.
-  Good: "ITS HEART STOPS\\nWHEN IT SWIMS", "SHARKS ARE OLDER\\nTHAN TREES", "WHY DOES THIS\\nCAR FLY?"
-  Bad: "OCTOPUS TRICK\\nHEART CONTROL", "SHARK SURVIVAL\\nMILLIONS YEARS", "OCTOPUS FACTS", and reaction filler like "WHAT THE...", "SERIOUSLY?!", "NO BRAINER", "WHOA".
-A good hook is a clear, surprising, TRUE claim or question about the topic that anyone understands instantly,
-and that makes them want the explanation. Good examples:
-{HOOK_EXAMPLES}
-Bad: riddles, metaphors that need explaining, vague teasers, labels, exaggerations ("on demand", "can control"),
-and generic lines like "AI is changing quickly" or "Here's what you need to know".
-Vary the angle: surprising fact, "you" question, myth vs truth, comparison, number, mini-story.
-{"Each hook must lead with ONE specific, surprising fact from the sources: a number, a name or a result." if sources else ""}
-{hook_block}
-Return JSON: {{"hooks": [{{"spoken": "...", "screen": "..."}}]}}""", 0.9)
-            data = []
-            for h in first_list(raw):
-                if isinstance(h, dict):
-                    spoken = clean(field(h, ("spoken", "line", "hook", "voice", "text")))
-                    if spoken and stands_alone(spoken) and spoken not in [d["spoken"] for d in data]:
-                        screen = field(h, ("screen", "on_screen", "onscreen", "headline", "overlay", "caption"))
-                        data.append({"spoken": spoken, "screen": clean_screen(screen)})
-            if len(data) < 6:
-                raise ValueError(f"only {len(data)} usable hooks")
-            return data
-        hook_list = step("1 hooks", hooks)
-        for k, h in enumerate(hook_list):
-            log(f"  {k}. {h['spoken']}  |  {h['screen']!r}" + ("" if natural_screen(h["screen"], h["spoken"]) else "  [screen text not natural]"))
-
-        # 2. rank: clear AND curious AND true; keep the top 3 so the creator can remake with another one
-        def rank():
-            listing = "\n".join(f"{k}. {h['spoken']}" for k, h in enumerate(hook_list))
-            data = ask(model, f"""You are the editor of a learning channel. Rank the best opening lines.
-Each must pass ALL tests:
-1. Clear: a 12-year-old understands it instantly on the first listen, with no explanation.
-2. Curious: they really want to know why or how.
-3. True: no exaggeration or misleading wording.
-Reject lines that lean on a line before them ("That means...", "This is why..."), riddles, metaphors, vague teasers, generic lines, and lines that give the whole answer away.
-Prefer a hook with a specific number, name or result.
-{"It must also be accurate to the sources and neutral." if news else ""}
-{f'The creator suggested this hook idea: "{hook_idea}". If a hook based on it passes the tests, rank it first.' if hook_idea else ""}
-{f"The creator's instructions for this reel: {instructions}" if instructions else ""}
-
-{listing}
-
-Return JSON with the 3 best, best first: {{"top": [{{"index": <number>, "why": "<one short sentence>"}}]}}""", 0.2)
-            raw = data.get("top", data.get("ranking", [])) if isinstance(data, dict) else data
-            picks = []
-            for r in raw if isinstance(raw, list) else []:
-                try:
-                    i = int(str(field(r, ("index", "number", "best")) if isinstance(r, dict) else r).strip(". "))
-                except ValueError:
-                    continue
-                if 0 <= i < len(hook_list) and i not in [p[0] for p in picks]:
-                    picks.append((i, field(r, ("why", "reason")) if isinstance(r, dict) else ""))
-            if not picks:
-                raise ValueError("no usable ranking")
-            return picks[:3]
-        picks = step("2 rank", rank)
-        hook_options = []
-        for i, why in picks:
-            h = dict(hook_list[i], why=clean(why))
-            h["screen"] = h["screen"].upper()
-            if not natural_screen(h["screen"], h["spoken"]):  # keyword soup or filler: write a proper headline
-                h["screen"] = make_screen(model, h["spoken"], log)
-            hook_options.append(h)
+        hook_options = brainstorm_hooks(model, rules, src_block, topic, news, bool(sources), hook_idea, instructions, log)
         hook = hook_options[0]
-        for n, h in enumerate(hook_options, 1):
-            log(f"  top {n}: {h['spoken']}  |  {h['screen']!r}  ({h.get('why', '')})")
 
     # 3. write the story
     def write_story():

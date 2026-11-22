@@ -3,15 +3,25 @@
   - optional free web search: Bing News RSS (recent news) + Wikipedia (background)
 and trim it to the parts most relevant to the topic, so it fits in the LLM's prompt.
 """
-import html, json, re, urllib.parse, urllib.request
+import html, json, re, time, urllib.error, urllib.parse, urllib.request
 import xml.etree.ElementTree as ET
 
 UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ReelStudio/1.0"}
 TOTAL_CHARS = 14000  # roughly 3,500 tokens of source text for the LLM
 
 
-def _get(url, timeout=25):
-    return urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=timeout).read()
+def _get(url, timeout=25, tries=3):
+    """Download a page, retrying a couple of times: a home internet connection often drops for a few seconds."""
+    for attempt in range(1, tries + 1):
+        try:
+            return urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=timeout).read()
+        except urllib.error.HTTPError as e:
+            if e.code < 500 and e.code != 429 or attempt == tries:  # a real "no" from the site: don't keep asking
+                raise
+        except Exception:
+            if attempt == tries:
+                raise
+        time.sleep(3 * attempt)
 
 
 def read_pdf(path):
@@ -54,9 +64,17 @@ def article_images(page):
     return found[:8]
 
 
-def read_link(url):
+def read_link(url, tries=3):
+    """Read an article. Your own links get retries (the page usually opens after a short internet drop);
+    news found by search uses tries=1, because many sites simply block programs and there are others to read."""
     import trafilatura
-    downloaded = trafilatura.fetch_url(url)
+    downloaded = None
+    for attempt in range(tries):
+        downloaded = trafilatura.fetch_url(url)
+        if downloaded:
+            break
+        if attempt + 1 < tries:
+            time.sleep(3 * (attempt + 1))
     if not downloaded:
         raise ValueError("could not open the page (it may block programs or need a login)")
     text = trafilatura.extract(downloaded, include_comments=False, include_tables=False) or ""
@@ -83,16 +101,26 @@ def search_news(topic, n=4):
         real = urllib.parse.parse_qs(urllib.parse.urlparse(link).query).get("url", [link])[0]
         if real.startswith("http") and real not in urls:
             urls.append(real)
-    found, errors = [], []
-    for url in urls[: n * 3]:
-        if len(found) >= n:
-            break
+    # read the candidate articles at the same time, at most ~90 s in total, and keep the first n that work
+    # (in the search's own order); one slow or blocking site can no longer hold up the whole reel
+    from concurrent.futures import ThreadPoolExecutor, wait
+    candidates = urls[: n * 3]
+    found, errors, results = [], [], {}
+    pool = ThreadPoolExecutor(max_workers=6)
+    futures = {pool.submit(read_link, url, 1): url for url in candidates}
+    done, not_done = wait(futures, timeout=90)
+    for f in done:
         try:
-            src = read_link(url)
+            results[futures[f]] = f.result()
+        except Exception as e:
+            errors.append(f"{futures[f]}: {e}")
+    errors += [f"{futures[f]}: took too long, skipped" for f in not_done]
+    pool.shutdown(wait=False, cancel_futures=True)
+    for url in candidates:
+        if url in results and len(found) < n:
+            src = results[url]
             src["kind"] = "news"
             found.append(src)
-        except Exception as e:
-            errors.append(f"{url}: {e}")
     return found, errors
 
 
