@@ -15,3 +15,7 @@ static/
 
 # cached voice samples (made on demand)
 voice_previews/
+
+# Discover's story list and the stories you made or skipped
+discover.json
+discover.tmp

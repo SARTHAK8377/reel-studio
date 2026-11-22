@@ -23,6 +23,11 @@ back to the website so you can watch and download it.
   tracks from Wikimedia Commons).
 - **Library:** watch, download, remake, stop or delete reels, one at a time or several together.
 - **Batches:** type several topics, one per line, and they share one Kaggle run.
+- **Discover:** scans 13 news feeds and Google Trends on a timer you choose (15 minutes to 12 hours, or
+  "Scan now"), groups the same story from many sites, and scores each story out of 100: popular now (40),
+  growing fast (20), reel potential rated by a small AI on your computer (30, Ollama `llama3.2`), and fresh (10).
+  Make a reel from any story with one click, or skip it. **Auto mode** makes the best x stories every y hours,
+  only if they reach your minimum score. Scanning uses no GPU hours; only the reels it makes do.
 
 ## How it works
 
@@ -76,8 +81,10 @@ If the website is closed or restarted while a reel is on Kaggle, it picks that r
 | Path | What it is |
 |---|---|
 | `app.py` | The website and the background worker that sends batches to Kaggle |
-| `templates/index.html` | The whole web page (Create, Library, Settings) |
+| `templates/index.html` | The whole web page (Create, Discover, Library, Settings) |
 | `engine/research.py` | News, Wikipedia, PDF and link research, run on your computer |
+| `engine/discover.py` | Discover: reads news feeds and Google Trends, groups stories, scores them (on your computer) |
+| `discover.json` | Discover's current story list and the stories you made or skipped (not in the repository) |
 | `engine/write_script.py` | Hooks, ranking, script, clarity and fact checks |
 | `engine/make_reel_fast.py` | Photo and clip search, photo checking, voice, music and video |
 | `engine/kaggle_worker_template.py` | The script that runs on Kaggle (setup, model, one reel after another) |

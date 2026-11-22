@@ -15,6 +15,7 @@ KAGGLE = str(Path(sys.executable).parent / "kaggle.exe")
 SLUG = "reel-studio-worker"
 sys.path.insert(0, str(ENGINE))
 import research  # noqa: E402
+import discover  # noqa: E402
 
 app = Flask(__name__)
 work_queue = queue.Queue()
@@ -57,10 +58,19 @@ def note(job, text):
 
 # ---------- Kaggle ----------
 
+NETWORK_TROUBLE = re.compile(r"HTTPSConnectionPool|SSLError|ConnectTimeout|ConnectionError|Read timed out|timed out|"
+                             r"Temporary failure|Max retries exceeded", re.I)
+
+
 def kaggle(*args, timeout=300):
-    r = subprocess.run([KAGGLE, *args], capture_output=True, text=True, timeout=timeout,
-                       env={**os.environ, "PYTHONIOENCODING": "utf-8"})
-    return r.returncode, (r.stdout + r.stderr).strip()
+    """Run the Kaggle tool. A call that hangs (a bad internet moment) returns an error instead of crashing the run."""
+    try:
+        # the tool prints UTF-8 (set below); read it as UTF-8 too, or an unusual character in its output breaks the read
+        r = subprocess.run([KAGGLE, *args], capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           timeout=timeout, env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+    except subprocess.TimeoutExpired:
+        return 124, f"Kaggle did not answer within {timeout} s (internet trouble?)"
+    return r.returncode, ((r.stdout or "") + (r.stderr or "")).strip()
 
 
 _user = None
@@ -85,6 +95,8 @@ def kaggle_user():
 
 def kaggle_status(ref):
     code, out = kaggle("kernels", "status", ref, timeout=60)
+    if NETWORK_TROUBLE.search(out) and "KernelWorkerStatus" not in out:
+        return "unknown: no answer from Kaggle (internet trouble), checking again soon"
     low = out.lower()
     for word in ("queued", "running", "complete", "error", "cancel"):
         if word in low:
@@ -140,8 +152,23 @@ def fail(job, e):
     update(job, status="error", stage="Failed", error=str(e))
 
 
+def hooks_payload(job):
+    """"Write new hooks" for a finished reel: reuse its research (no new web searches), avoid the hooks already shown."""
+    update(job, stage="Getting ready to write new hooks", status="working")
+    pdir = JOBS / job["parent_id"]
+    parent = load(job["parent_id"])
+    sources_file = pdir / "sources.json"
+    sources = json.loads(sources_file.read_text(encoding="utf-8")) if sources_file.exists() else []
+    shown = [h["spoken"] for h in (parent.get("script") or {}).get("hook_options", [])]
+    return {"id": job["id"], "mode": "hooks", "topic": job["topic"], "news": job["news"],
+            "only_sources": job["only_sources"], "sources": sources, "instructions": job.get("instructions", ""),
+            "hook_idea": job.get("hook_idea", ""), "avoid": shown, "photo_pool": []}
+
+
 def research_job(job):
     """Research on this laptop. Returns the payload the Kaggle worker needs for this reel."""
+    if job.get("kind") == "hooks":
+        return hooks_payload(job)
     jdir = JOBS / job["id"]
     update(job, stage="Researching", status="working")
     pdfs = sorted((jdir / "uploads").glob("*.pdf"))
@@ -203,10 +230,19 @@ def run_batch(jobs):
 
     def push(machine):
         build_worker(payloads, folder, machine)
-        code, out = kaggle("kernels", "push", "-p", str(folder), "--accelerator", machine)
+        for attempt in range(1, 4):  # a connection error while sending: wait and send again
+            code, out = kaggle("kernels", "push", "-p", str(folder), "--accelerator", machine)
+            if "successfully pushed" in out or not NETWORK_TROUBLE.search(out) or attempt == 3:
+                break
+            for job in ready:
+                note(job, f"Could not reach Kaggle (attempt {attempt}), trying again in a minute")
+            time.sleep(60)
+        version = re.search(r"Kernel version (\d+) successfully pushed", out)
         for job in ready:
             note(job, (out.splitlines()[-1] if out else f"push exit {code}") + f" (GPU: {GPUS[machine]}"
                  + (f", batch of {len(ready)} reels)" if len(ready) > 1 else ")"))
+            if version:  # remember which Kaggle run is ours, so we download exactly its results later
+                update(job, kaggle_version=int(version[1]))
         return not (code or "error" in out.lower()), out
 
     machine = "NvidiaTeslaT4"
@@ -259,8 +295,7 @@ def watch(ready, folder, ref, machine, started, pushed, push=None):
             return  # everything in this run was stopped from the website; stop watching Kaggle
         if status in ("complete", "error", "cancel"):
             out_dir = folder.parent / "result"
-            shutil.rmtree(out_dir, ignore_errors=True)
-            kaggle("kernels", "output", ref, "-p", str(out_dir), "-o", timeout=900)
+            download_results(ready, ref, out_dir)
             if not (out_dir / ready[0]["id"]).exists():
                 # No results from OUR run yet. Kaggle's status can belong to an older (e.g. cancelled) run while ours
                 # is still queued (tonight: 30 min), so only give up once it has looked finished-without-results for an hour.
@@ -283,7 +318,58 @@ def watch(ready, folder, ref, machine, started, pushed, push=None):
         time.sleep(30)
 
 
+def download_results(ready, ref, out_dir, tries=3):
+    """Download this run's results: exactly our Kaggle version (not just "the newest run"), all pages (a batch of
+    5 reels is ~27 files; the tool shows 20 per page by default), and check that every reel came back. If the
+    download was cut short (an internet drop), download again before anyone gets marked as failed."""
+    version = ready[0].get("kaggle_version")
+    target = f"{ref}/{version}" if version else ref
+    for attempt in range(1, tries + 1):
+        shutil.rmtree(out_dir, ignore_errors=True)
+        kaggle("kernels", "output", target, "-p", str(out_dir), "-o", "-q", "--page-size", "200", timeout=900)
+        if not (out_dir / ready[0]["id"]).exists():
+            return  # nothing from our run yet (Kaggle may still show an older run): the caller waits and asks again
+        missing = [j["topic"] for j in ready if not (out_dir / j["id"] / "result.json").exists()]
+        if not missing:
+            return
+        if attempt < tries:
+            for job in ready:
+                note(job, f"The download from Kaggle was incomplete ({len(missing)} reel(s) missing), downloading again")
+            time.sleep(30)
+
+
+def collect_hooks(job, res_dir, status):
+    """New hooks came back: add them to the reel they belong to (after the ones already shown)."""
+    res_file, hooks_file = res_dir / "result.json", res_dir / "hooks.json"
+    res = json.loads(res_file.read_text(encoding="utf-8")) if res_file.exists() else {}
+    if res.get("status") != "done" or not hooks_file.exists():
+        fail(job, RuntimeError("Writing new hooks failed: " + res.get("error", f"no result ({status})")))
+        try:
+            update(load(job["parent_id"]), hooks_job=None)
+        except FileNotFoundError:
+            pass
+        return
+    new = json.loads(hooks_file.read_text(encoding="utf-8")).get("hooks", [])
+    with lock:
+        parent = json.loads(job_path(job["parent_id"]).read_text(encoding="utf-8"))
+    script = parent.get("script") or {}
+    options = script.setdefault("hook_options", [])
+    known = {h["spoken"].lower() for h in options}
+    first_new = len(options)
+    options += [h for h in new if h["spoken"].lower() not in known]
+    pscript = JOBS / parent["id"] / "script.json"
+    if pscript.exists():  # keep the reel's script file in step, so "Remake with this hook" finds them
+        on_disk = json.loads(pscript.read_text(encoding="utf-8"))
+        on_disk["hook_options"] = options
+        pscript.write_text(json.dumps(on_disk, indent=2, ensure_ascii=False), encoding="utf-8")
+    update(parent, script=script, hooks_job=None, new_hooks_from=first_new)
+    note(parent, f"{len(options) - first_new} new hooks written")
+    update(job, status="done", stage="Done", timings=res.get("timings", {}), model=res.get("model"))
+
+
 def collect(job, res_dir, status, batch_log):
+    if job.get("kind") == "hooks":
+        return collect_hooks(job, res_dir, status)
     jdir = JOBS / job["id"]
     for name in ("reel.mp4", "script.json", "log.txt", "photo_credits.txt"):
         if (res_dir / name).exists():
@@ -375,23 +461,25 @@ def create_job():
     return jsonify({"id": ids[0], "ids": ids})
 
 
-def new_job(topic, pdfs):
+def new_job(topic, pdfs, form=None, extra=None):
+    """form: the Create page's fields (a plain dict when Discover makes the reel). extra: fields added to the job."""
+    form = request.form if form is None else form
     jid = datetime.now().strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:4]
     jdir = JOBS / jid
     (jdir / "uploads").mkdir(parents=True)
     for k, data in enumerate(pdfs):
         (jdir / "uploads" / f"{k:02d}.pdf").write_bytes(data)
-    links = [l.strip() for l in request.form.get("links", "").splitlines() if l.strip().startswith("http")]
+    links = [l.strip() for l in form.get("links", "").splitlines() if l.strip().startswith("http")]
     job = {"id": jid, "topic": topic, "news": True,  # always News mode: every reel is researched from recent articles
-           "only_sources": request.form.get("only_sources") == "on", "links": links,
-           "press_photos": request.form.get("press_photos") == "on",
-           "hook_idea": request.form.get("hook_idea", "").strip()[:300],
-           "format": request.form.get("format", "9:16") if request.form.get("format") in ("9:16", "1:1", "16:9") else "9:16",
-           "voice": re.sub(r"[^\w-]", "", request.form.get("voice", ""))[:60],
-           "music": request.form.get("music", "off") if request.form.get("music") in MUSIC_MOODS else "off",
-           "instructions": request.form.get("instructions", "").strip()[:1500],
-           "pasted": request.form.get("pasted", ""), "pdf_count": len(list((jdir / "uploads").glob("*.pdf"))),
-           "created": time.time(), "status": "queued", "stage": "Waiting in line", "log": []}
+           "only_sources": form.get("only_sources") == "on", "links": links,
+           "press_photos": form.get("press_photos") == "on",
+           "hook_idea": form.get("hook_idea", "").strip()[:300],
+           "format": form.get("format", "9:16") if form.get("format") in ("9:16", "1:1", "16:9") else "9:16",
+           "voice": re.sub(r"[^\w-]", "", form.get("voice", ""))[:60],
+           "music": form.get("music", "off") if form.get("music") in MUSIC_MOODS else "off",
+           "instructions": form.get("instructions", "").strip()[:1500],
+           "pasted": form.get("pasted", ""), "pdf_count": len(list((jdir / "uploads").glob("*.pdf"))),
+           "created": time.time(), "status": "queued", "stage": "Waiting in line", "log": [], **(extra or {})}
     save(job)
     work_queue.put(jid)
     return jid
@@ -414,6 +502,28 @@ def job_file(jid, name):
         abort(404)
     return send_from_directory(JOBS / jid, name, as_attachment=request.args.get("download") == "1",
                                download_name=f"reel-{jid}.mp4" if name == "reel.mp4" else name)
+
+
+@app.post("/api/jobs/<jid>/new-hooks")
+def new_hooks(jid):
+    """Write a fresh set of hooks for a finished reel (a short Kaggle run: no new research, no new video)."""
+    if not re.fullmatch(r"[\w-]+", jid) or not job_path(jid).exists():
+        abort(404)
+    parent = load(jid)
+    if parent.get("status") != "done" or not parent.get("script"):
+        return jsonify({"error": "New hooks can only be written for a finished reel."}), 409
+    if parent.get("hooks_job") and job_path(parent["hooks_job"]).exists() \
+            and load(parent["hooks_job"]).get("status") in ("queued", "working"):
+        return jsonify({"error": "New hooks are already being written for this reel."}), 409
+    new_id = datetime.now().strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:4]
+    (JOBS / new_id).mkdir(parents=True)
+    job = {k: parent[k] for k in ("topic", "news", "only_sources", "instructions", "hook_idea") if k in parent}
+    job.update(id=new_id, kind="hooks", parent_id=jid, links=[], pasted="", created=time.time(), status="queued",
+               stage="Waiting in line", log=[])
+    save(job)
+    update(parent, hooks_job=new_id)
+    work_queue.put(new_id)
+    return jsonify({"id": new_id})
 
 
 @app.post("/api/jobs/<jid>/remake")
@@ -566,6 +676,241 @@ def save_settings():
     return get_settings()
 
 
+# ---------- Discover: find stories worth a reel (on this laptop, no GPU) ----------
+
+DISCOVER = HERE / "discover.json"   # the current story list, when the last scan ran, and stories you made or skipped
+DISCOVER_DEFAULTS = {"every_min": 60, "show": 10, "auto": False, "auto_count": 2, "auto_hours": 4, "min_score": 60}
+SCAN_CHOICES = (15, 30, 60, 120, 180, 360, 720)        # minutes
+SHOW_CHOICES = (5, 10, 15, 20, 30)
+AUTO_HOURS = (1, 2, 3, 4, 6, 8, 12, 24)
+DECIDED_DAYS = 3                    # a story you made or skipped is not shown again for this long (it's stale by then)
+disc_lock = threading.Lock()
+scan_now = threading.Event()
+DISC = {"scanning": False, "progress": ""}  # live scan state (not saved)
+
+
+def disc_settings():
+    s = {**DISCOVER_DEFAULTS, **(settings().get("discover") or {})}
+    return s
+
+
+def disc_state():
+    try:
+        st = json.loads(DISCOVER.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        st = {}
+    st.setdefault("stories", []); st.setdefault("decided", {})
+    return st
+
+
+def disc_save(st):
+    tmp = DISCOVER.with_suffix(".tmp")
+    tmp.write_text(json.dumps(st, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(DISCOVER)
+
+
+def made_topics(days=7):
+    """Topics of reels from the last week, so Discover doesn't suggest a story you already have a reel about."""
+    cutoff, out = time.time() - days * 86400, []
+    for p in JOBS.glob("*/job.json"):
+        try:
+            j = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if j.get("created", 0) >= cutoff and j.get("kind") != "hooks" and j.get("status") not in ("error", "stopped"):
+            out.append(j["topic"])
+    return out
+
+
+def run_scan():
+    DISC.update(scanning=True, progress="Reading the news")
+    started = time.time()
+    with disc_lock:
+        st = disc_state()
+    old, decided = {s["id"]: s for s in st["stories"]}, dict(st["decided"])
+    try:
+        stories, problems = discover.scan(old, decided, made_topics(), log=lambda m: DISC.update(progress=m))
+        err = ""
+    except Exception as e:
+        traceback.print_exc()
+        stories, problems, err = None, [], str(e)[:300]
+    with disc_lock:
+        st = disc_state()  # you may have made or skipped stories while the scan ran
+        if stories is not None:
+            st["stories"] = [s for s in stories if s["id"] not in st["decided"]]
+        st["decided"] = {k: v for k, v in st["decided"].items() if time.time() - v.get("at", 0) < DECIDED_DAYS * 86400}
+        st.update(last_scan=started, last_error=err, problems=problems[:5])
+        disc_save(st)
+    DISC.update(scanning=False, progress="")
+
+
+def reel_options():
+    """Reels made from Discover use the same voice, format, music and photo choice as your most recent own reel."""
+    form = {"format": "9:16", "voice": "", "music": "off", "press_photos": "on"}
+    for p in sorted(JOBS.glob("*/job.json"), reverse=True)[:40]:
+        try:
+            j = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if j.get("kind") != "hooks" and not j.get("from_discover"):
+            form.update(format=j.get("format", "9:16"), voice=j.get("voice", ""), music=j.get("music", "off"),
+                        press_photos="on" if j.get("press_photos") else "")
+            break
+    return form
+
+
+def decide(ids, status, how="you"):
+    """status "made": each story becomes a reel (its news links go along as sources); "skipped": it's hidden.
+    Either way the story never comes back. Returns the new reel ids."""
+    made, form = [], reel_options()
+    with disc_lock:
+        st = disc_state()
+        for sid in ids:
+            s = next((x for x in st["stories"] if x["id"] == sid), None)
+            if not s:
+                continue
+            rec = {"status": status, "core": s["core"], "at": time.time(), "title": s["title"], "score": s["score"], "how": how}
+            if status == "made":
+                rec["job"] = new_job(s["title"], [], {**form, "links": "\n".join(s.get("reel_links", []))},
+                                     {"from_discover": sid, "discover_score": s["score"], "auto": how == "auto"})
+                made.append(rec["job"])
+            st["decided"][sid] = rec
+            st["stories"].remove(s)
+        disc_save(st)
+    return made
+
+
+def auto_due(s, st):
+    if not s["auto"]:
+        return None
+    return (st.get("auto_window_start") or time.time()) + s["auto_hours"] * 3600
+
+
+def run_auto():
+    """End of an Auto window: make the best stories found during it (at most x, only those above your minimum score)."""
+    s = disc_settings()
+    with disc_lock:
+        st = disc_state()
+        picks = [x["id"] for x in st["stories"] if x["score"] >= s["min_score"]][: s["auto_count"]]
+        st["auto_window_start"] = time.time()
+        st["auto_last"] = {"at": time.time(), "made": len(picks)}
+        disc_save(st)
+    if picks:
+        decide(picks, "made", how="auto")
+    print(f"Discover auto mode: made {len(picks)} reel(s)")
+
+
+def discover_loop():
+    """Scan every few minutes/hours (your choice) or when you press Scan now; in Auto mode, make reels at each window's end."""
+    while True:
+        try:
+            s, now = disc_settings(), time.time()
+            with disc_lock:
+                st = disc_state()
+                due = auto_due(s, st)
+                if s["auto"] and (not st.get("auto_window_start") or now - due > 1800):
+                    # Auto was just switched on, or the website was closed when a window ended: start a fresh window
+                    st["auto_window_start"] = now
+                    disc_save(st)
+                    due = auto_due(s, st)
+            wake = min((st.get("last_scan") or 0) + s["every_min"] * 60, due or float("inf"))
+            if wake > now and not scan_now.wait(timeout=min(wake - now, 30)):
+                continue  # not time yet (settings are looked at again every 30 s)
+            scan_now.clear()
+            run_scan()
+            s = disc_settings()
+            if s["auto"] and time.time() >= (auto_due(s, disc_state()) or float("inf")):
+                run_auto()
+        except Exception:
+            traceback.print_exc()
+            DISC.update(scanning=False, progress="")
+            time.sleep(60)
+
+
+def gpu_minutes_per_reel():
+    """Average Kaggle minutes per reel over your recent runs (several reels share one run)."""
+    runs = {}
+    for p in JOBS.glob("*/job.json"):
+        try:
+            j = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if j.get("status") == "done" and j.get("kaggle_minutes") and j.get("kaggle_started"):
+            runs[j["kaggle_started"]] = (j["kaggle_minutes"], len(j.get("batch") or [j["id"]]))
+    recent = [runs[k] for k in sorted(runs)[-15:]]
+    return sum(m for m, _ in recent) / sum(n for _, n in recent) if recent else 8.0
+
+
+@app.get("/api/discover")
+def get_discover():
+    s, st, now = disc_settings(), disc_state(), time.time()
+    keep = ("id", "title", "summary", "site_count", "sites", "newest", "first_seen", "links", "reel_links", "trend",
+            "ai", "parts", "score", "reasons")
+    stories = [{k: x.get(k) for k in keep} for x in st["stories"][: s["show"]]]
+    per_reel = gpu_minutes_per_reel()
+    due = auto_due(s, st)
+    return jsonify({"settings": s, "stories": stories, "total": len(st["stories"]),
+                    "above_min": sum(x["score"] >= s["min_score"] for x in st["stories"]),
+                    "last_scan": st.get("last_scan"), "next_scan": (st.get("last_scan") or now) + s["every_min"] * 60,
+                    "scanning": DISC["scanning"], "progress": DISC["progress"], "error": st.get("last_error", ""),
+                    "problems": st.get("problems", []), "auto_next": due, "auto_last": st.get("auto_last"),
+                    "gpu_per_reel": round(per_reel, 1),
+                    "gpu_week_hours": round(s["auto_count"] * 168 / s["auto_hours"] * per_reel / 60, 1),
+                    "choices": {"every_min": SCAN_CHOICES, "show": SHOW_CHOICES, "auto_hours": AUTO_HOURS,
+                                "auto_count": list(range(1, MAX_BATCH + 1))},
+                    "made": sorted(({"title": v["title"], "job": v.get("job"), "how": v.get("how"), "at": v["at"],
+                                     "score": v.get("score")} for v in st["decided"].values() if v["status"] == "made"),
+                                   key=lambda v: -v["at"])[:10]})
+
+
+@app.post("/api/discover/scan")
+def discover_scan():
+    scan_now.set()
+    return jsonify({"ok": True})
+
+
+@app.post("/api/discover/settings")
+def discover_settings():
+    body, cfg = request.get_json(silent=True) or {}, settings()
+    s = {**DISCOVER_DEFAULTS, **(cfg.get("discover") or {})}
+
+    def pick(key, allowed):
+        try:
+            v = int(body[key])
+        except (KeyError, TypeError, ValueError):
+            return
+        if v in allowed:
+            s[key] = v
+    pick("every_min", SCAN_CHOICES); pick("show", SHOW_CHOICES); pick("auto_hours", AUTO_HOURS)
+    pick("auto_count", range(1, MAX_BATCH + 1)); pick("min_score", range(0, 101))
+    if "auto" in body:
+        turned_on = bool(body["auto"]) and not s["auto"]
+        s["auto"] = bool(body["auto"])
+        with disc_lock:
+            st = disc_state()
+            st["auto_window_start"] = time.time() if s["auto"] else None
+            disc_save(st)
+        if turned_on:
+            print("Discover auto mode switched on")
+    cfg["discover"] = s
+    CONFIG.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+    return get_discover()
+
+
+@app.post("/api/discover/make")
+def discover_make():
+    ids = [str(i) for i in (request.get_json(silent=True) or {}).get("ids", [])][:MAX_BATCH * 2]
+    made = decide(ids, "made")
+    return jsonify({"made": made})
+
+
+@app.post("/api/discover/skip")
+def discover_skip():
+    ids = [str(i) for i in (request.get_json(silent=True) or {}).get("ids", [])][:100]
+    decide(ids, "skipped")
+    return jsonify({"ok": True})
+
+
 def resume_unfinished():
     """After a restart: reels still waiting in line go back in line (nothing was started for them yet);
     the most recent Kaggle run that was still going is followed again (RESUME); anything else that was being made
@@ -583,6 +928,12 @@ def resume_unfinished():
         if j["id"] in resumed:
             continue
         if j.get("status") == "queued" and not j.get("stopped"):
+            work_queue.put(j["id"])
+        elif j.get("status") == "working" and not j.get("kaggle_started") and not j.get("stopped"):
+            # it was still being researched on this laptop: nothing was sent to Kaggle yet, so just put it back in line
+            j.update(status="queued", stage="Waiting in line")
+            j.setdefault("log", []).append(f"{datetime.now():%H:%M:%S}  The website restarted during research; back in line")
+            p.write_text(json.dumps(j, indent=2, ensure_ascii=False), encoding="utf-8")
             work_queue.put(j["id"])
         elif j.get("status") in ("queued", "working"):
             j.update(status="stopped", stopped=True, stage="Stopped",
@@ -607,5 +958,6 @@ if __name__ == "__main__":
     JOBS.mkdir(exist_ok=True)
     resume_unfinished()
     threading.Thread(target=worker_loop, daemon=True).start()
+    threading.Thread(target=discover_loop, daemon=True).start()
     print("Reel Studio is running: open http://127.0.0.1:5050")
     app.run(host="127.0.0.1", port=5050, debug=False, threaded=True)
