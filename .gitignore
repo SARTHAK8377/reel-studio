@@ -1,5 +1,6 @@
 # private settings and keys
 config.json
+config.tmp
 auth_log.txt
 
 # your reels, scripts and uploaded PDFs

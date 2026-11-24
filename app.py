@@ -16,6 +16,7 @@ SLUG = "reel-studio-worker"
 sys.path.insert(0, str(ENGINE))
 import research  # noqa: E402
 import discover  # noqa: E402
+import instagram  # noqa: E402
 
 app = Flask(__name__)
 work_queue = queue.Queue()
@@ -62,8 +63,33 @@ NETWORK_TROUBLE = re.compile(r"HTTPSConnectionPool|SSLError|ConnectTimeout|Conne
                              r"Temporary failure|Max retries exceeded", re.I)
 
 
+KAGGLE_CREDS = Path.home() / ".kaggle" / "credentials.json"
+_creds_lock = threading.Lock()
+
+
+def renew_kaggle_login():
+    """The Kaggle sign-in (kaggle auth login) lasts 12 hours. Kaggle's library only renews it 30 minutes AFTER it has
+    expired (a flipped check in kagglesdk), so for half an hour every call is refused ("Authentication required").
+    When the sign-in expires within 35 minutes, mark it as long expired so the library renews it on the next call.
+    Only the expiry time is changed; the tokens are untouched."""
+    from datetime import timedelta, timezone
+    with _creds_lock:
+        try:
+            data = json.loads(KAGGLE_CREDS.read_text(encoding="utf-8"))
+            expires = datetime.fromisoformat(data["access_token_expiration"])
+        except (OSError, ValueError, KeyError, TypeError):
+            return  # no OAuth sign-in file (an API token is used instead), nothing to do
+        now = datetime.now(timezone.utc)
+        if data.get("refresh_token") and now - timedelta(minutes=31) < expires < now + timedelta(minutes=35):
+            data["access_token_expiration"] = (now - timedelta(minutes=31)).isoformat()
+            tmp = KAGGLE_CREDS.with_suffix(".tmp")
+            tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            os.replace(tmp, KAGGLE_CREDS)
+
+
 def kaggle(*args, timeout=300):
     """Run the Kaggle tool. A call that hangs (a bad internet moment) returns an error instead of crashing the run."""
+    renew_kaggle_login()
     try:
         # the tool prints UTF-8 (set below); read it as UTF-8 too, or an unusual character in its output breaks the read
         r = subprocess.run([KAGGLE, *args], capture_output=True, text=True, encoding="utf-8", errors="replace",
@@ -676,6 +702,212 @@ def save_settings():
     return get_settings()
 
 
+# ---------- Instagram: post a finished reel after you approve it (on this laptop, no GPU) ----------
+
+post_now = threading.Event()        # wakes the posting thread when you approve a post
+POSTING = {"busy": None}            # id of the reel being posted right now
+RETRY_MINUTES = (5, 15, 60)         # waits between tries when Instagram or the internet has trouble
+
+
+def ig_settings():
+    return settings().get("instagram") or {}
+
+
+def save_config(cfg):
+    tmp = CONFIG.with_suffix(".tmp")
+    tmp.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+    tmp.replace(CONFIG)
+
+
+def ig_update(jid, **changes):
+    """Change a reel's posting state, reading the newest copy from disk so nothing else on the reel is lost."""
+    with lock:
+        job = load(jid)
+        ig = job.setdefault("ig", {})
+        ig.update(changes)
+        for k in [k for k, v in ig.items() if v is None]:
+            del ig[k]
+        job_path(jid).write_text(json.dumps(job, indent=2, ensure_ascii=False), encoding="utf-8")
+        return job
+
+
+def due_posts(now=None):
+    """Reels approved for posting whose time has come, oldest first. A post that was interrupted (site closed
+    mid-post) is picked up again; it resumes from its Instagram container, so it is never posted twice."""
+    now = now or time.time()
+    due = []
+    for p in JOBS.glob("*/job.json"):
+        try:
+            ig = json.loads(p.read_text(encoding="utf-8")).get("ig") or {}
+        except (OSError, ValueError):
+            continue
+        if ig.get("state") == "posting" or (ig.get("state") == "scheduled" and ig.get("at", 0) <= now):
+            due.append((ig.get("at", 0), p.parent.name))
+    return [jid for _, jid in sorted(due)]
+
+
+def post_one(jid):
+    cfg = ig_settings()
+    job = load(jid)
+    ig = job.get("ig") or {}
+    if not cfg.get("token"):
+        return ig_update(jid, state="failed", stage=None, error="Instagram is not connected. Connect it in Settings.")
+    video = JOBS / jid / "reel.mp4"
+    if not video.exists():
+        return ig_update(jid, state="failed", stage=None, error="This reel has no video file.")
+    tries = ig.get("tries", 0) + 1
+    ig_update(jid, state="posting", stage="Starting", tries=tries, error=None)
+    note(load(jid), f"posting to Instagram (try {tries})")
+    try:
+        res = instagram.publish(cfg, video, ig.get("caption", ""), container=ig.get("container"),
+                                on_step=lambda s: ig_update(jid, stage=s),
+                                on_container=lambda c: ig_update(jid, container=c), ai=ig.get("ai", True))
+    except instagram.IGError as e:
+        if e.retry and tries <= len(RETRY_MINUTES):
+            wait = RETRY_MINUTES[tries - 1]
+            ig_update(jid, state="scheduled", at=time.time() + wait * 60, stage=None,
+                      error=f"{e} Trying again in {wait} min.")
+        else:
+            ig_update(jid, state="failed", stage=None, error=str(e))
+        note(load(jid), f"Instagram post failed: {e}")
+        return
+    except Exception as e:  # a bug, not Instagram: stop instead of retrying forever
+        ig_update(jid, state="failed", stage=None, error=f"{type(e).__name__}: {e}")
+        note(load(jid), "Instagram post failed:\n" + traceback.format_exc()[-1500:])
+        return
+    ig_update(jid, state="posted", stage=None, error=None, posted_at=time.time(),
+              media_id=res.get("media_id"), permalink=res.get("permalink"))
+    note(load(jid), "posted to Instagram " + (res.get("permalink") or ""))
+
+
+def post_loop():
+    while True:
+        post_now.wait(20)
+        post_now.clear()
+        for jid in due_posts():
+            POSTING["busy"] = jid
+            try:
+                post_one(jid)
+            except Exception:
+                traceback.print_exc()
+            finally:
+                POSTING["busy"] = None
+
+
+@app.get("/api/instagram")
+def get_instagram():
+    cfg = ig_settings()
+    return jsonify({"connected": bool(cfg.get("token")), "username": cfg.get("username", ""),
+                    "page": cfg.get("page", ""), "connected_at": cfg.get("connected_at"),
+                    "hashtags": settings().get("default_hashtags", "")})
+
+
+@app.post("/api/instagram/connect")
+def ig_connect():
+    body = request.get_json(silent=True) or {}
+    token, app_id, secret = (str(body.get(k, "")).strip() for k in ("token", "app_id", "app_secret"))
+    if not (token and app_id and secret):
+        return jsonify({"error": "Paste the token, the App ID and the App Secret."}), 400
+    if not re.fullmatch(r"\d{5,25}", app_id):
+        return jsonify({"error": "The App ID is a long number. Copy it from App settings > Basic."}), 400
+    try:
+        got = instagram.connect(token, app_id, secret)
+    except instagram.IGError as e:
+        return jsonify({"error": str(e)}), 400
+    cfg = settings()
+    cfg["instagram"] = {**got, "connected_at": time.time()}   # the App Secret is not kept: the Page token never expires
+    save_config(cfg)
+    return get_instagram()
+
+
+@app.post("/api/instagram/disconnect")
+def ig_disconnect():
+    cfg = settings()
+    cfg.pop("instagram", None)
+    save_config(cfg)
+    return get_instagram()
+
+
+@app.post("/api/instagram/hashtags")
+def ig_hashtags():
+    tags = str((request.get_json(silent=True) or {}).get("hashtags", ""))
+    tags = " ".join("#" + t.lstrip("#") for t in re.findall(r"#?[\w]+", tags))[:300]
+    cfg = settings()
+    cfg["default_hashtags"] = tags
+    save_config(cfg)
+    return get_instagram()
+
+
+@app.post("/api/instagram/check")
+def ig_check():
+    cfg = ig_settings()
+    if not cfg.get("token"):
+        return jsonify({"error": "Instagram is not connected."}), 409
+    try:
+        name = instagram.account(cfg)
+    except instagram.IGError as e:
+        return jsonify({"error": str(e)}), 502
+    left = instagram.posts_left(cfg)
+    return jsonify({"username": name, "used": left[0] if left else None, "allowed": left[1] if left else None})
+
+
+@app.post("/api/jobs/<jid>/post")
+def post_reel(jid):
+    """Approve a reel for Instagram: post now, or at a time you pick ("at": unix seconds)."""
+    if not re.fullmatch(r"[\w-]+", jid) or not job_path(jid).exists():
+        abort(404)
+    body = request.get_json(silent=True) or {}
+    job = load(jid)
+    ig = job.get("ig") or {}
+    if job.get("status") != "done" or not (JOBS / jid / "reel.mp4").exists():
+        return jsonify({"error": "Only a finished reel can be posted."}), 409
+    if not ig_settings().get("token"):
+        return jsonify({"error": "Connect Instagram in Settings first."}), 409
+    if ig.get("state") in ("posting", "posted"):
+        return jsonify({"error": "This reel is already " + ("being posted." if ig["state"] == "posting" else "posted.")}), 409
+    caption = str(body.get("caption", "")).strip()[:2200]
+    ai = body.get("ai", True) is not False  # Instagram's "AI info" label, on unless turned off
+    container = ig.get("container")
+    if container and (caption != ig.get("caption") or ai != ig.get("ai", True)):  # made with other text or label: don't reuse it
+        try:
+            if instagram.container_status(ig_settings(), container).get("status_code") == "PUBLISHED":
+                ig_update(jid, state="posted", posted_at=time.time(), error=None, stage=None)
+                return jsonify({"error": "This reel was already posted by an earlier try."}), 409
+        except instagram.IGError:
+            pass
+        container = None
+    try:
+        at = float(body.get("at") or 0)
+    except (TypeError, ValueError):
+        return jsonify({"error": "That time is not valid."}), 400
+    now = time.time()
+    if at and at < now - 60:
+        return jsonify({"error": "That time has already passed."}), 400
+    if at > now + 75 * 86400:
+        return jsonify({"error": "Pick a time within the next 75 days."}), 400
+    ig_update(jid, state="scheduled", at=max(at, now), caption=caption, ai=ai, approved_at=now, tries=0, error=None,
+              stage=None, container=container)
+    note(load(jid), "approved for Instagram" + (f" at {datetime.fromtimestamp(at):%d %b %H:%M}" if at > now + 60 else ""))
+    if at <= now + 60:
+        post_now.set()
+    return jsonify({"ok": True})
+
+
+@app.post("/api/jobs/<jid>/post/cancel")
+def cancel_post(jid):
+    if not re.fullmatch(r"[\w-]+", jid) or not job_path(jid).exists():
+        abort(404)
+    ig = load(jid).get("ig") or {}
+    if ig.get("state") not in ("scheduled", "failed") or POSTING["busy"] == jid:
+        return jsonify({"error": "This post can't be cancelled now."}), 409
+    with lock:  # keep the container id: if it was already made, a later post picks it up instead of uploading twice
+        job = load(jid)
+        job["ig"] = {k: v for k, v in ig.items() if k in ("container", "caption", "ai")}
+        job_path(jid).write_text(json.dumps(job, indent=2, ensure_ascii=False), encoding="utf-8")
+    note(load(jid), "Instagram post cancelled")
+    return jsonify({"ok": True})
+
+
 # ---------- Discover: find stories worth a reel (on this laptop, no GPU) ----------
 
 DISCOVER = HERE / "discover.json"   # the current story list, when the last scan ran, and stories you made or skipped
@@ -959,5 +1191,6 @@ if __name__ == "__main__":
     resume_unfinished()
     threading.Thread(target=worker_loop, daemon=True).start()
     threading.Thread(target=discover_loop, daemon=True).start()
+    threading.Thread(target=post_loop, daemon=True).start()
     print("Reel Studio is running: open http://127.0.0.1:5050")
     app.run(host="127.0.0.1", port=5050, debug=False, threaded=True)

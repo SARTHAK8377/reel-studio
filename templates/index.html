@@ -301,6 +301,15 @@
   .caption-box { padding: 16px; border-radius: 12px; background: var(--panel-2); box-shadow: inset 0 0 0 1px var(--line); }
   .caption-text { margin: 0; font-size: 15px; line-height: 1.6; white-space: pre-wrap; }
   .caption-tags { margin: 12px 0 0; color: var(--accent); font-weight: 500; word-spacing: 4px; }
+  #igCaption { width: 100%; resize: vertical; min-height: 150px; line-height: 1.55; margin-top: 8px; font: inherit; }
+  .post-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 14px; }
+  .post-row input[type=datetime-local] { width: auto; min-width: 0; }
+  .note.ok i { color: var(--ok); }
+  .ig-steps { margin: 4px 0 12px; padding-left: 20px; color: var(--muted); font-size: 14px; display: grid; gap: 4px; }
+  .ig-fields { display: grid; gap: 10px; }
+  .ig-card { padding: 18px; }
+  .ig-card h3 { margin: 0; font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  .ig-card .state { font-size: 12px; font-weight: 600; padding: 2px 9px; border-radius: 99px; }
   .err-box { color: var(--bad); padding: 12px 14px; border-radius: 10px; background: color-mix(in srgb, var(--bad) 10%, transparent);
              box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bad) 35%, transparent); font-size: 14px; }
 
@@ -579,6 +588,7 @@
             <input type="radio" name="flt" id="fl-done" value="done"><label for="fl-done">Ready</label>
             <input type="radio" name="flt" id="fl-work" value="work"><label for="fl-work">In progress</label>
             <input type="radio" name="flt" id="fl-err" value="error"><label for="fl-err">Failed or stopped</label>
+            <input type="radio" name="flt" id="fl-unposted" value="unposted"><label for="fl-unposted">Not posted</label>
           </div>
           <div class="search"><i class="ph ph-magnifying-glass"></i><input class="input" id="q" placeholder="Search topics"></div>
           <button class="ghost danger" id="delFailed" hidden><i class="ph ph-broom"></i><span></span></button>
@@ -590,9 +600,10 @@
 
     <!-- SETTINGS -->
     <section class="view" id="v-settings" hidden>
-      <div class="head"><div><span class="eyebrow">Settings</span><h1>Photo and video sources</h1>
-        <p class="lede">Free keys unlock more pictures and short video clips. Keys stay in <span class="mono">config.json</span> on this laptop and are only sent to your private Kaggle run.</p></div></div>
-      <div class="settings" id="keys"></div>
+      <div class="head"><div><span class="eyebrow">Settings</span><h1>Instagram and sources</h1>
+        <p class="lede">Connect Instagram to post reels you approve. Free keys unlock more pictures and short video clips. Everything stays in <span class="mono">config.json</span> on this laptop; photo keys are only sent to your private Kaggle run.</p></div></div>
+      <div class="settings" id="igbox"></div>
+      <div class="settings" id="keys" style="margin-top:16px"></div>
     </section>
   </main>
 </div>
@@ -771,7 +782,7 @@ function tileHTML(j) {
   let thumb;
   if (j.status === "done" && j.has_video) {
     thumb = `<div class="thumb"><video src="/jobs/${esc(j.id)}/reel.mp4#t=1.2" muted playsinline preload="metadata"></video>
-      <span class="badge">${esc(j.format || "9:16")}${j.parent_id ? ` · remake` : ""}</span><span class="play"><i class="ph-fill ph-play"></i></span></div>`;
+      <span class="badge">${esc(j.format || "9:16")}${j.parent_id ? ` · remake` : ""}${igBadge(j)}</span><span class="play"><i class="ph-fill ph-play"></i></span></div>`;
   } else if (ended(j)) {
     thumb = j.status === "stopped"
       ? `<div class="thumb failed" style="color:var(--muted)"><div><i class="ph ph-stop-circle"></i><div>Stopped</div></div></div>`
@@ -788,7 +799,7 @@ function tileHTML(j) {
     <span class="cap"><b>${esc(j.topic)}</b><span>${j.news ? "News" : "General"} · ${ago(j.created)}</span></span></div>`;
 }
 function tileKey(j) {  // everything a tile shows, except the "5 min ago" text (updated in place)
-  return JSON.stringify([j.status, j.has_video, j.format, j.parent_id, j.topic, j.news,
+  return JSON.stringify([j.status, j.has_video, j.format, j.parent_id, j.topic, j.news, j.ig?.state,
                          working(j) ? [stageText(j), progress(j)] : 0, selecting, selected.has(j.id)]);
 }
 function bindPreview(tile) {  // play the reel silently while the mouse is over its tile
@@ -801,7 +812,8 @@ let selecting = false;
 const selected = new Set();
 function shown() {
   const f = $("#filter input:checked").value, q = $("#q").value.trim().toLowerCase();
-  return JOBS.filter(j => j.kind !== "hooks" && (f === "all" || (f === "work" ? working(j) : f === "error" ? ended(j) : j.status === f)) && (!q || j.topic.toLowerCase().includes(q)));
+  const unposted = j => j.status === "done" && j.has_video && j.ig?.state !== "posted";
+  return JOBS.filter(j => j.kind !== "hooks" && (f === "all" || (f === "work" ? working(j) : f === "error" ? ended(j) : f === "unposted" ? unposted(j) : j.status === f)) && (!q || j.topic.toLowerCase().includes(q)));
 }
 function renderGrid(force) {
   const list = shown();
@@ -966,15 +978,68 @@ function hooksHTML(j) {
 function captionText(s) {
   return [s.caption || "", (s.hashtags || []).join(" ")].filter(Boolean).join("\n\n");
 }
+/* ---------- Instagram ---------- */
+let IG = { connected: false, username: "", hashtags: "" };
+const postDraft = {}, postWhen = {}, postAI = {};  // reel id -> caption / time / AI label you set (kept while the page redraws)
+async function loadIG() { try { IG = await (await fetch("/api/instagram")).json(); } catch (e) {} }
+function igBadge(j) {
+  const st = j.ig?.state;
+  return st === "posted" ? " · posted" : st === "scheduled" || st === "posting" ? " · to post" : st === "failed" ? " · post failed" : "";
+}
+function defaultCaption(j) {
+  const s = j.script || {};
+  let text = s.caption ? captionText(s) : (s.scenes || []).map(x => x[0]).join(" ");
+  const extra = (IG.hashtags || "").split(/\s+/).filter(t => t && !text.toLowerCase().includes(t.toLowerCase()));
+  if (extra.length) text += (s.hashtags?.length ? " " : "\n\n") + extra.join(" ");
+  return text;
+}
+const when = t => new Date(t * 1000).toLocaleString([], { weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
+function localInput(t) { const d = new Date(t * 1000); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 16); }
+
+function postHTML(j) {
+  const ig = j.ig || {};
+  if (ig.state === "posted") return `<div class="note ok"><i class="ph-fill ph-check-circle"></i><div><b>Posted to Instagram</b> ${ig.posted_at ? when(ig.posted_at) : ""}.
+      ${ig.permalink ? `<div style="margin-top:10px"><a class="ghost" href="${esc(ig.permalink)}" target="_blank" rel="noopener"><i class="ph ph-instagram-logo"></i>Open on Instagram</a></div>` : ""}</div></div>`;
+  if (ig.state === "posting") return `<div class="note"><i class="ph ph-hourglass-medium"></i><div><b>Posting to Instagram.</b> ${esc(ig.stage || "Starting")}. This usually takes 1 to 3 minutes.</div></div>`;
+  if (ig.state === "scheduled") return `<div class="note"><i class="ph ph-calendar-check"></i><div><b>${ig.at > Date.now() / 1000 + 60 ? "Will post " + when(ig.at) : "Posting in a moment"}</b>${IG.username ? ` to @${esc(IG.username)}` : ""}.
+      ${ig.error ? `<br><span style="color:var(--warn)">${esc(ig.error)}</span>` : ""}
+      <br><span class="hint">Posts only go out while Reel Studio is running. If it is closed at that time, the post goes out when you next open it.</span>
+      <div style="margin-top:10px"><button class="ghost danger" data-post-cancel><i class="ph ph-x"></i>Cancel post</button></div></div></div>`;
+  const fail = ig.state === "failed" ? `<div class="err-box" style="margin-bottom:14px"><b>Posting failed.</b> ${esc(ig.error || "")}</div>` : "";
+  if (!IG.connected) return fail + `<div class="note"><i class="ph ph-instagram-logo"></i><div>Connect Instagram in <a href="#settings">Settings</a> to post this reel from here. You can still copy the caption below.</div></div>`;
+  const fmt = j.format && j.format !== "9:16" ? `<div class="note"><i class="ph ph-warning"></i><div>This reel is ${esc(j.format)}. Instagram shows Reels as 9:16, so it will have blank space or be cropped.</div></div>` : "";
+  const later = postWhen[j.id] || localInput(Date.now() / 1000 + 3600);
+  return `${fail}${fmt}<label class="label" for="igCaption">Post to @${esc(IG.username)}<span class="opt">edit the text if you want</span></label>
+    <textarea class="input" id="igCaption" rows="7" maxlength="2200">${esc(postDraft[j.id] ?? ig.caption ?? defaultCaption(j))}</textarea>
+    <label class="check" style="margin-top:12px"><input type="checkbox" id="igAI" ${(postAI[j.id] ?? ig.ai ?? true) ? "checked" : ""}><span>Add Instagram's "AI info" label
+      <small>Meta asks for it on posts with realistic AI audio or video, like the AI voice in these reels.</small></span></label>
+    <div class="post-row">
+      <button class="btn" data-post-now><span>${ig.state === "failed" ? "Try again now" : "Post now"}</span><span class="nub"><i class="ph-bold ph-paper-plane-tilt"></i></span></button>
+      <span class="hint">or</span>
+      <input class="input" type="datetime-local" id="igWhen" value="${esc(later)}">
+      <button class="ghost" data-post-later><i class="ph ph-calendar-plus"></i>Schedule</button>
+    </div>`;
+}
 function captionHTML(j) {
   const s = j.script || {};
-  if (!s.caption) return `<div class="note"><i class="ph ph-info"></i><div>This reel was made before captions existed. Remake it to get a ready-to-paste Instagram caption with hashtags.</div></div>`;
-  return `<div class="note"><i class="ph ph-instagram-logo"></i><div>A ready-to-paste Instagram caption, written from this reel's facts. Check it before posting.</div></div>
-    <div class="caption-box">
-      <p class="caption-text">${esc(s.caption)}</p>
-      ${(s.hashtags || []).length ? `<p class="caption-tags">${s.hashtags.map(esc).join(" ")}</p>` : ""}
-    </div>
-    <div class="row-btns" style="margin-top:14px"><button class="btn" data-copy-caption><span>Copy caption</span><span class="nub"><i class="ph-bold ph-copy"></i></span></button></div>`;
+  const copy = s.caption ? `<div class="row-btns" style="margin-top:14px"><button class="ghost" data-copy-caption><i class="ph ph-copy"></i>Copy caption</button></div>`
+    : `<p class="hint" style="margin-top:12px">This reel was made before captions existed, so the post text above is the script.</p>`;
+  return postHTML(j) + copy;
+}
+async function approvePost(at) {
+  const j = JOBS.find(x => x.id === openId);
+  const caption = ($("#igCaption")?.value || "").trim();
+  if (!j) return;
+  if (!caption && !confirm("The post text is empty. Post without a caption?")) return;
+  if (!at && !confirm(`Post "${j.topic}" to @${IG.username} now?`)) return;
+  try {
+    const res = await fetch(`/api/jobs/${j.id}/post`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ caption, at, ai: $("#igAI")?.checked ?? true }) });
+    const d = await res.json();
+    if (!res.ok) return toast(d.error || "Could not approve the post", true);
+    delete postDraft[j.id]; delete postWhen[j.id]; delete postAI[j.id];
+    toast(at ? `Scheduled for ${when(at)}` : "Posting to Instagram");
+  } catch (e) { return toast("The website server is not running", true); }
+  await refresh(); lastDrawer = ""; renderDrawer();
 }
 async function copyText(text) {
   try { await navigator.clipboard.writeText(text); return true; } catch (e) {}
@@ -1025,7 +1090,7 @@ async function stopReel(id) {
 function renderDrawer() {
   if (!openId) return;
   const j = JOBS.find(x => x.id === openId);
-  const key = JSON.stringify([j, tab]);
+  const key = JSON.stringify([j, tab, IG]);
   if (key === lastDrawer) return;
   const v = $("#dpanel video");
   if (v && !v.paused && j && lastDrawer && JSON.parse(lastDrawer)[0]?.status === j.status) return; // don't interrupt playback
@@ -1077,13 +1142,32 @@ function renderDrawer() {
       </div>
     </div>`;
 }
+$("#dpanel").addEventListener("input", e => {
+  if (e.target.id === "igCaption") postDraft[openId] = e.target.value;
+  if (e.target.id === "igWhen") postWhen[openId] = e.target.value;
+  if (e.target.id === "igAI") postAI[openId] = e.target.checked;
+});
 $("#dpanel").addEventListener("click", async e => {
   if (e.target.closest("[data-close]")) return closeDrawer();
   const t = e.target.closest("[data-tab]");
   if (t) { tab = t.dataset.tab; lastDrawer = ""; return renderDrawer(); }
+  if (e.target.closest("[data-post-now]")) return approvePost(0);
+  if (e.target.closest("[data-post-later]")) {
+    const v = $("#igWhen").value, at = v ? new Date(v).getTime() / 1000 : 0;
+    if (!at || at < Date.now() / 1000 + 60) return toast("Pick a time in the future", true);
+    return approvePost(at);
+  }
+  if (e.target.closest("[data-post-cancel]")) {
+    if (!confirm("Cancel this Instagram post?")) return;
+    const res = await fetch(`/api/jobs/${openId}/post/cancel`, { method: "POST" }).catch(() => null);
+    const d = res ? await res.json() : { error: "The website server is not running" };
+    toast(res?.ok ? "Post cancelled" : d.error || "Could not cancel", !res?.ok);
+    await refresh(); lastDrawer = ""; return renderDrawer();
+  }
   if (e.target.closest("[data-copy-caption]")) {
     const j = JOBS.find(x => x.id === openId);
-    return toast(j && await copyText(captionText(j.script || {})) ? "Caption copied. Paste it into Instagram" : "Could not copy. Select the text and copy it", !j);
+    const text = $("#igCaption")?.value || (j && (j.ig?.caption || defaultCaption(j)));
+    return toast(text && await copyText(text) ? "Caption copied. Paste it into Instagram" : "Could not copy. Select the text and copy it", !text);
   }
   if (e.target.closest("[data-hook-page]")) {
     const j = JOBS.find(x => x.id === openId), n = (j?.script?.hook_options || []).length;
@@ -1128,7 +1212,66 @@ const KEYS = [
   ["pexels_api_key", "Pexels", "ph-video-camera", "Free stock video clips and photos.", "https://www.pexels.com/api/"],
   ["pixabay_api_key", "Pixabay", "ph-film-strip", "More free stock video clips.", "https://pixabay.com/api/docs/"],
 ];
+async function loadIGBox() {
+  await loadIG();
+  const head = `<h3><i class="ph ph-instagram-logo"></i>Instagram<span class="state ${IG.connected ? "on" : "off"}">${IG.connected ? "Connected" : "Not connected"}</span></h3>`;
+  const tags = `<label class="label" for="igTags" style="margin-top:14px">Hashtags added to every post<span class="opt">optional</span></label>
+    <div class="post-row" style="margin-top:6px"><input class="input" id="igTags" value="${esc(IG.hashtags)}" placeholder="#news #ireelearn" style="flex:1;min-width:200px">
+      <button class="ghost" data-ig="tags"><i class="ph ph-floppy-disk"></i>Save</button></div>`;
+  $("#igbox").innerHTML = IG.connected
+    ? `<div class="shell"><div class="panel ig-card">${head}
+        <p style="margin:6px 0 0;color:var(--muted);font-size:14px">Posting as <b>@${esc(IG.username)}</b>${IG.page ? ` through the Facebook Page <b>${esc(IG.page)}</b>` : ""}. Reels are only posted when you approve them in the Library (Caption tab).</p>
+        <p class="hint" id="igCheckOut" style="margin:8px 0 0"></p>
+        ${tags}
+        <div class="row-btns" style="margin-top:14px"><button class="ghost" data-ig="check"><i class="ph ph-plugs-connected"></i>Check connection</button>
+          <button class="ghost danger" data-ig="disconnect"><i class="ph ph-plugs"></i>Disconnect</button></div></div></div>`
+    : `<div class="shell"><div class="panel ig-card">${head}
+        <p style="margin:6px 0 4px;color:var(--muted);font-size:14px">Post finished reels to Instagram after you approve them. One-time setup, all free:</p>
+        <ol class="ig-steps">
+          <li>Make your Instagram a <b>Creator</b> account and link it to a <b>Facebook Page</b> (Instagram app: Edit profile &gt; Page).</li>
+          <li>Create a <b>Business</b> app on <a href="https://developers.facebook.com/apps" target="_blank" rel="noopener">Meta for Developers <i class="ph ph-arrow-up-right"></i></a> and copy its App ID and App Secret (App settings &gt; Basic).</li>
+          <li>In the <a href="https://developers.facebook.com/tools/explorer/" target="_blank" rel="noopener">Graph API Explorer <i class="ph ph-arrow-up-right"></i></a>, pick your app and <b>User Token</b>, add <span class="mono">instagram_basic, instagram_content_publish, pages_show_list, pages_read_engagement, business_management</span>, then Generate Access Token and tick your Page and Instagram account.</li>
+        </ol>
+        <div class="ig-fields">
+          <input class="input mono" type="password" id="igToken" placeholder="Paste the access token" autocomplete="off">
+          <input class="input mono" id="igApp" placeholder="App ID" autocomplete="off" inputmode="numeric">
+          <input class="input mono" type="password" id="igSecret" placeholder="App Secret" autocomplete="off">
+        </div>
+        <p class="hint" style="margin:10px 0 0">These stay on this laptop. The App Secret is only used once, to turn the token into one that never expires, and is not saved.</p>
+        <div class="row-btns" style="margin-top:14px"><button class="btn" data-ig="connect"><span>Connect</span><span class="nub"><i class="ph-bold ph-plug"></i></span></button></div>
+        ${tags}</div></div>`;
+}
+$("#igbox").addEventListener("click", async e => {
+  const b = e.target.closest("[data-ig]");
+  if (!b) return;
+  const post = (url, body) => fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) })
+    .then(async r => ({ ok: r.ok, d: await r.json() })).catch(() => ({ ok: false, d: { error: "The website server is not running" } }));
+  const act = b.dataset.ig;
+  if (act === "connect") {
+    const body = { token: $("#igToken").value.trim(), app_id: $("#igApp").value.trim(), app_secret: $("#igSecret").value.trim() };
+    if (!body.token || !body.app_id || !body.app_secret) return toast("Paste the token, App ID and App Secret", true);
+    b.disabled = true; b.querySelector("span").textContent = "Connecting…";
+    const { ok, d } = await post("/api/instagram/connect", body);
+    if (!ok) { b.disabled = false; b.querySelector("span").textContent = "Connect"; return toast(d.error || "Could not connect", true); }
+    toast(`Connected as @${d.username}`);
+  } else if (act === "disconnect") {
+    if (!confirm("Disconnect Instagram? Scheduled posts will fail until you connect again.")) return;
+    await post("/api/instagram/disconnect"); toast("Instagram disconnected");
+  } else if (act === "tags") {
+    const { ok, d } = await post("/api/instagram/hashtags", { hashtags: $("#igTags").value });
+    toast(ok ? (d.hashtags ? "Hashtags saved" : "Hashtags cleared") : d.error, !ok);
+  } else if (act === "check") {
+    b.disabled = true;
+    const { ok, d } = await post("/api/instagram/check");
+    b.disabled = false;
+    $("#igCheckOut").textContent = ok ? `Working. @${d.username}${d.allowed != null ? `: ${d.used} of ${d.allowed} API posts used in the last 24 hours.` : "."}` : d.error;
+    $("#igCheckOut").style.color = ok ? "var(--ok)" : "var(--bad)";
+    return;
+  }
+  loadIGBox();
+});
 async function loadKeys() {
+  loadIGBox();
   let s = {};
   try { s = await (await fetch("/api/settings")).json(); } catch (e) {}
   $("#keys").innerHTML = KEYS.map(([k, name, ic, desc, url]) => `
@@ -1283,6 +1426,7 @@ async function refresh() {
   if (!$("#v-discover").hidden) loadDiscover();
 }
 route(); checkStatus(); refresh(); loadDiscover();
+loadIG().then(() => { lastDrawer = ""; renderDrawer(); });
 setInterval(refresh, 5000); setInterval(checkStatus, 30000);
 setInterval(() => { if ($("#v-discover").hidden) loadDiscover(); }, 60000);  // keeps the Discover count in the menu fresh
 </script>

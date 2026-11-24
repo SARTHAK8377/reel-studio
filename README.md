@@ -28,6 +28,12 @@ back to the website so you can watch and download it.
   growing fast (20), reel potential rated by a small AI on your computer (30, Ollama `llama3.2`), and fresh (10).
   Make a reel from any story with one click, or skip it. **Auto mode** makes the best x stories every y hours,
   only if they reach your minimum score. Scanning uses no GPU hours; only the reels it makes do.
+- **Post to Instagram:** connect your Instagram (Creator or Business account linked to a Facebook Page) in
+  Settings. Each finished reel's Caption tab then has the post text (the reel's caption and hashtags, editable)
+  with **Post now** or **Schedule**, and Instagram's "AI info" label (ticked by default, since the voice is AI).
+  Nothing is posted until you approve it. The video goes straight from your
+  computer to Instagram through Meta's official API (no GPU, no public link), and the reel shows "Posted" with
+  a link. The Library's **Not posted** filter lists reels you haven't posted yet.
 
 ## How it works
 
@@ -67,6 +73,11 @@ If the website is closed or restarted while a reel is on Kaggle, it picks that r
    All keys are free:
    - Flickr (Creative Commons photos)
    - Pexels and Pixabay (stock video clips)
+   - Instagram, to post reels: make the account a Creator account linked to a Facebook Page, create a free
+     Business app on developers.facebook.com, and generate a User Token in the Graph API Explorer with
+     `instagram_basic`, `instagram_content_publish`, `pages_show_list`, `pages_read_engagement` and
+     `business_management`. Paste the token, App ID and App Secret into Settings. The site swaps the token for
+     a Page token that does not expire; the App Secret is not saved.
 
 5. Start the site by double-clicking `start.bat`, or run:
 
@@ -84,6 +95,7 @@ If the website is closed or restarted while a reel is on Kaggle, it picks that r
 | `templates/index.html` | The whole web page (Create, Discover, Library, Settings) |
 | `engine/research.py` | News, Wikipedia, PDF and link research, run on your computer |
 | `engine/discover.py` | Discover: reads news feeds and Google Trends, groups stories, scores them (on your computer) |
+| `engine/instagram.py` | Posting to Instagram: connect, upload, wait for processing, publish (on your computer) |
 | `discover.json` | Discover's current story list and the stories you made or skipped (not in the repository) |
 | `engine/write_script.py` | Hooks, ranking, script, clarity and fact checks |
 | `engine/make_reel_fast.py` | Photo and clip search, photo checking, voice, music and video |
